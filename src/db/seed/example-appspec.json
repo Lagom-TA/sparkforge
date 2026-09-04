@@ -1,0 +1,28 @@
+{
+  "app": {
+    "name": "HabitLoop",
+    "description": "每周习惯追踪器：添加习惯、记录完成、查看本周完成率"
+  },
+  "collections": [
+    {
+      "key": "habits",
+      "label": "习惯",
+      "fields": [
+        { "key": "name", "label": "习惯名称", "type": "text", "required": true },
+        {
+          "key": "category",
+          "label": "类别",
+          "type": "select",
+          "options": ["学习", "运动", "作息", "其他"]
+        },
+        { "key": "doneToday", "label": "今天已完成", "type": "boolean" },
+        { "key": "weeklyTarget", "label": "每周目标次数", "type": "number" },
+        { "key": "notes", "label": "备注", "type": "textarea" }
+      ]
+    }
+  ],
+  "views": [
+    { "type": "table", "collection": "habits", "title": "我的习惯" },
+    { "type": "form", "collection": "habits", "title": "新建习惯" }
+  ]
+}
