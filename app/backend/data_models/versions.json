@@ -1,0 +1,42 @@
+{
+    "title": "versions",
+    "description": "项目的可恢复生成版本",
+    "type": "object",
+    "properties": {
+        "id": {
+            "type": "integer"
+        },
+        "user_id": {
+            "type": "string"
+        },
+        "project_id": {
+            "type": "integer"
+        },
+        "version_number": {
+            "type": "integer",
+            "minimum": 1
+        },
+        "product_spec": {
+            "type": "object"
+        },
+        "app_spec": {
+            "type": "object"
+        },
+        "source_bundle": {
+            "type": "object"
+        },
+        "change_summary": {
+            "type": "string",
+            "maxLength": 500
+        }
+    },
+    "required": [
+        "user_id",
+        "project_id",
+        "version_number",
+        "product_spec",
+        "app_spec",
+        "source_bundle",
+        "change_summary"
+    ]
+}

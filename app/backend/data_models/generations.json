@@ -1,0 +1,60 @@
+{
+    "title": "generations",
+    "description": "项目规划、生成和修复任务记录",
+    "type": "object",
+    "properties": {
+        "id": {
+            "type": "integer"
+        },
+        "user_id": {
+            "type": "string"
+        },
+        "project_id": {
+            "type": "integer"
+        },
+        "request_text": {
+            "type": "string",
+            "maxLength": 8000
+        },
+        "status": {
+            "type": "string",
+            "enum": [
+                "running",
+                "awaiting_approval",
+                "succeeded",
+                "failed",
+                "cancelled"
+            ]
+        },
+        "current_stage": {
+            "type": "string",
+            "enum": [
+                "planning",
+                "building",
+                "validating",
+                "repairing"
+            ]
+        },
+        "product_spec": {
+            "type": "object"
+        },
+        "public_log": {
+            "type": "array",
+            "items": {
+                "type": "object"
+            }
+        },
+        "error_message": {
+            "type": "string",
+            "maxLength": 1000
+        }
+    },
+    "required": [
+        "user_id",
+        "project_id",
+        "request_text",
+        "status",
+        "current_stage",
+        "public_log"
+    ]
+}

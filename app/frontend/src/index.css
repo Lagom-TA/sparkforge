@@ -1,0 +1,210 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 42 20% 98%;
+    --foreground: 35 10% 15%;
+    --card: 40 25% 99%;
+    --card-foreground: 35 10% 15%;
+    --popover: 40 25% 99%;
+    --popover-foreground: 35 10% 15%;
+    --primary: 221 72% 45%;
+    --primary-foreground: 40 25% 99%;
+    --secondary: 40 12% 94%;
+    --secondary-foreground: 35 10% 20%;
+    --muted: 40 10% 94%;
+    --muted-foreground: 35 7% 43%;
+    --accent: 220 45% 94%;
+    --accent-foreground: 221 72% 35%;
+    --destructive: 2 66% 46%;
+    --destructive-foreground: 40 25% 99%;
+    --border: 38 10% 87%;
+    --input: 38 10% 87%;
+    --ring: 221 72% 45%;
+    --radius: 0.625rem;
+    --sidebar-background: 40 14% 96%;
+    --sidebar-foreground: 35 10% 20%;
+    --sidebar-primary: 221 72% 45%;
+    --sidebar-primary-foreground: 40 25% 99%;
+    --sidebar-accent: 40 12% 91%;
+    --sidebar-accent-foreground: 35 10% 20%;
+    --sidebar-border: 38 10% 87%;
+    --sidebar-ring: 221 72% 45%;
+  }
+
+  .dark {
+    --background: 35 8% 10%;
+    --foreground: 40 14% 91%;
+    --card: 35 8% 13%;
+    --card-foreground: 40 14% 91%;
+    --popover: 35 8% 14%;
+    --popover-foreground: 40 14% 91%;
+    --primary: 218 74% 64%;
+    --primary-foreground: 35 10% 10%;
+    --secondary: 35 7% 18%;
+    --secondary-foreground: 40 12% 88%;
+    --muted: 35 7% 18%;
+    --muted-foreground: 38 7% 65%;
+    --accent: 218 24% 21%;
+    --accent-foreground: 218 72% 74%;
+    --destructive: 2 56% 45%;
+    --destructive-foreground: 40 14% 94%;
+    --border: 35 7% 23%;
+    --input: 35 7% 23%;
+    --ring: 218 74% 64%;
+    --sidebar-background: 35 8% 12%;
+    --sidebar-foreground: 40 12% 88%;
+    --sidebar-primary: 218 74% 64%;
+    --sidebar-primary-foreground: 35 10% 10%;
+    --sidebar-accent: 35 7% 18%;
+    --sidebar-accent-foreground: 40 12% 88%;
+    --sidebar-border: 35 7% 23%;
+    --sidebar-ring: 218 74% 64%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    color-scheme: light;
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    min-width: 320px;
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-kerning: normal;
+    text-rendering: optimizeLegibility;
+  }
+
+  h1 {
+    text-wrap: balance;
+  }
+
+  p {
+    text-wrap: pretty;
+  }
+
+  button,
+  a,
+  textarea,
+  input {
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background;
+  }
+
+  button,
+  a {
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}
+
+@keyframes sf-rise {
+  from {
+    opacity: 1;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes sf-soft-pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+    transform: scale(0.9);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes sf-progress-shimmer {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(220%);
+  }
+}
+
+@layer utilities {
+  .sf-enter {
+    animation: sf-rise 500ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  .sf-enter-delayed {
+    animation: sf-rise 600ms 90ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  .sf-panel {
+    box-shadow:
+      0 1px 2px hsl(35 10% 15% / 0.03),
+      0 12px 34px hsl(35 10% 15% / 0.055);
+  }
+
+  .sf-grid-wash {
+    background-image:
+      linear-gradient(hsl(var(--border) / 0.32) 1px, transparent 1px),
+      linear-gradient(90deg, hsl(var(--border) / 0.32) 1px, transparent 1px);
+    background-size: 32px 32px;
+    mask-image: linear-gradient(to bottom, black, transparent 82%);
+  }
+
+  .sf-status-dot {
+    animation: sf-soft-pulse 1.8s cubic-bezier(0.25, 1, 0.5, 1) infinite;
+  }
+
+  .sf-progress-active {
+    position: relative;
+    overflow: hidden;
+  }
+
+  .sf-progress-active::after {
+    position: absolute;
+    inset: 0;
+    width: 42%;
+    content: "";
+    background: linear-gradient(
+      90deg,
+      transparent,
+      hsl(var(--primary-foreground) / 0.28),
+      transparent
+    );
+    animation: sf-progress-shimmer 1.8s cubic-bezier(0.25, 1, 0.5, 1) infinite;
+  }
+}
+
+.reduce-motion *,
+.reduce-motion *::before,
+.reduce-motion *::after {
+  scroll-behavior: auto !important;
+  animation-delay: 0ms !important;
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-delay: 0ms !important;
+  animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

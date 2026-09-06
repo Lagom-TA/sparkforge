@@ -1,0 +1,38 @@
+{
+    "title": "app_records",
+    "description": "生成应用运行时的结构化数据",
+    "type": "object",
+    "properties": {
+        "id": {
+            "type": "integer"
+        },
+        "user_id": {
+            "type": "string"
+        },
+        "project_id": {
+            "type": "integer"
+        },
+        "collection_key": {
+            "type": "string",
+            "maxLength": 80
+        },
+        "record_key": {
+            "type": "string",
+            "maxLength": 120
+        },
+        "data": {
+            "type": "object"
+        },
+        "is_deleted": {
+            "type": "boolean"
+        }
+    },
+    "required": [
+        "user_id",
+        "project_id",
+        "collection_key",
+        "record_key",
+        "data",
+        "is_deleted"
+    ]
+}

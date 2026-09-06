@@ -1,0 +1,44 @@
+{
+    "title": "projects",
+    "description": "用户创建的 AI 应用项目",
+    "type": "object",
+    "properties": {
+        "id": {
+            "type": "integer"
+        },
+        "user_id": {
+            "type": "string"
+        },
+        "name": {
+            "type": "string",
+            "maxLength": 120
+        },
+        "initial_prompt": {
+            "type": "string",
+            "maxLength": 8000
+        },
+        "status": {
+            "type": "string",
+            "enum": [
+                "intake",
+                "planning",
+                "awaiting_approval",
+                "building",
+                "validating",
+                "repairing",
+                "ready",
+                "failed",
+                "refining"
+            ]
+        },
+        "active_version_id": {
+            "type": "integer"
+        }
+    },
+    "required": [
+        "user_id",
+        "name",
+        "initial_prompt",
+        "status"
+    ]
+}

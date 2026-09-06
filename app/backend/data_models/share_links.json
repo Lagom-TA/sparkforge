@@ -1,0 +1,40 @@
+{
+    "title": "share_links",
+    "description": "项目公开只读分享链接",
+    "type": "object",
+    "properties": {
+        "id": {
+            "type": "integer"
+        },
+        "user_id": {
+            "type": "string"
+        },
+        "project_id": {
+            "type": "integer"
+        },
+        "token": {
+            "type": "string",
+            "maxLength": 160
+        },
+        "permission": {
+            "type": "string",
+            "enum": [
+                "view"
+            ]
+        },
+        "is_active": {
+            "type": "boolean"
+        },
+        "expires_at": {
+            "type": "string",
+            "format": "date-time"
+        }
+    },
+    "required": [
+        "user_id",
+        "project_id",
+        "token",
+        "permission",
+        "is_active"
+    ]
+}
