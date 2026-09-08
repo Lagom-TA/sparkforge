@@ -1,50 +1,25 @@
 import { client } from '../src/lib/api';
-import { planProject, buildProject } from '../src/lib/generation';
-
-export async function interruptedPlanDoesNotOverwrite() {
-  const projectWrites: unknown[] = [];
-  const generationWrites: unknown[] = [];
-  let current = true;
-  const generation = {id:1,project_id:1,request_text:'test',status:'running',current_stage:'planning',public_log:[]};
-  client.entities.generations.create = async () => ({data:generation}) as any;
-  client.entities.generations.update = async ({data}: any) => { generationWrites.push(data); return {data:{...generation,...data}} as any; };
-  client.entities.projects.update = async ({data}: any) => { projectWrites.push(data); return {data} as any; };
-  client.ai.gentxt = async () => { current = false; throw new Error('迟到的请求失败'); };
-  try {
-    await planProject(1, 'test', {isCurrent:() => current, getControl:() => current ? 'running' : 'stopped'});
-  } catch { /* expected stale request */ }
-  return {projectWrites, generationWrites};
-}
-
-export async function buildPersistsApprovedPlan() {
-  const writes: any[] = [];
-  const generation = {id:1,project_id:1,request_text:'test',status:'running',current_stage:'preparing',public_log:[]};
-  client.entities.generations.create = async () => ({data:generation}) as any;
-  client.entities.generations.update = async ({data}: any) => { writes.push(data); return {data:{...generation,...data}} as any; };
-  client.entities.projects.update = async ({data}: any) => ({data}) as any;
-  client.ai.gentxt = async () => { throw new Error('测试模型故障'); };
-  const spec = {title:'恢复用蓝图',summary:'test',audience:'test',features:[],pages:[],entities:[],acceptance:[],outOfScope:[]};
-  try { await buildProject(1, spec, 1, 'test'); } catch { /* test interrupted model */ }
-  return writes;
-}
-
-export async function semanticBuildRepair(mode: 'repair' | 'invalid' | 'stopped') {
-  const requests: any[] = [];
-  const versions: any[] = [];
-  let current = true;
-  const generation = {id:1,project_id:1,request_text:'test',status:'running',current_stage:'building',public_log:[]};
-  client.entities.generations.create = async () => ({data:generation}) as any;
-  client.entities.generations.update = async ({data}: any) => ({data:{...generation,...data}}) as any;
-  client.entities.projects.update = async ({data}: any) => ({data}) as any;
-  client.entities.versions.create = async ({data}: any) => { versions.push(data); return {data:{id:1,...data}} as any; };
-  client.ai.gentxt = async (request: any) => {
+import { buildProject, resumeGeneration } from '../src/lib/generation';
+const plan={title:'恢复用蓝图',summary:'任务管理',audience:'团队',features:[0,1,2].map(i=>({name:String(i),description:'功能',priority:'P0'})),pages:[0,1].map(i=>({name:String(i),purpose:'查看'})),entities:[{name:'任务',fields:['标题']}],acceptance:['新增','修改','删除'],outOfScope:['支付']};
+export async function pipeline(mode: 'success'|'lost'|'stopped'|'resume') {
+  const requests: any[]=[];
+  const writes: any[]=[];
+  let current=true;
+  const generation={id:1,project_id:1,request_text:'test',status:'running',current_stage:'building',public_log:[],product_spec:plan};
+  for (const name of ['generations','projects','versions']) client.entities[name].update=async (args:any)=>{writes.push(args);return {data:{}} as any;};
+  client.apiCall.invoke=async (request:any)=>{
     requests.push(structuredClone(request));
-    if (mode === 'stopped') current = false;
-    const repaired = {appSpec:{app:{name:'测试',description:'测试'},navigation:[],dashboard:[],collections:[{key:'tasks',label:'任务',fields:[{key:'title',label:'标题',type:'text'},{key:'done',label:'完成',type:'boolean'}]}],views:[{type:'table',collection:'tasks',title:'任务'}],primaryAction:'添加'},files:{'src/App.tsx':'export default function App(){return null;}'}};
-    return {data:{content:JSON.stringify(requests.length === 2 && mode === 'repair' ? repaired : {appSpec:{},files:{}})}} as any;
+    if (request.url.endsWith('/step')) {
+      if (mode==='lost') throw new Error('network unavailable');
+      if (mode==='stopped') current=false;
+      return {data:{generation:{...generation,status:'succeeded'},status:'succeeded',stage:'source',kind:'build',version:{id:8,version_number:3}}} as any;
+    }
+    return {data:{generation,status:'pending',stage:'source',kind:'build'}} as any;
   };
-  const spec = {title:'修复测试蓝图',summary:'test',audience:'test',features:[],pages:[],entities:[],acceptance:[],outOfScope:[]};
-  let error = '';
-  try { await buildProject(1,spec,1,'test',{isCurrent:()=>current}); } catch (e) { error = String(e); }
-  return {requests,versions,error};
+  let error='';let version:any;
+  try {
+    if(mode==='resume') version=(await resumeGeneration(generation,{isCurrent:()=>current})).version;
+    else version=await buildProject(1,plan,999,'test',{isCurrent:()=>current});
+  } catch(e){error=String(e);}
+  return {requests,writes,error,version};
 }

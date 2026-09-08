@@ -160,24 +160,7 @@ class VersionsService:
         return [column == coerced_value]
 
     async def create(self, data: Dict[str, Any], user_id: Optional[str] = None, *, commit: bool = True) -> Optional[Versions]:
-        """Create a new versions"""
-        try:
-            await require_project(self.db, data.get("project_id"), user_id)
-            if user_id:
-                data['user_id'] = user_id
-            obj = Versions(**data)
-            self.db.add(obj)
-            if commit:
-                await self.db.commit()
-            else:
-                await self.db.flush()
-            await self.db.refresh(obj)
-            logger.info(f"Created versions with id: {obj.id}")
-            return obj
-        except Exception as e:
-            await self.db.rollback()
-            logger.error(f"Error creating versions: {str(e)}")
-            raise
+        raise HTTPException(status_code=409, detail="请使用生成任务接口，versions 由服务端统一管理。")
 
     async def check_ownership(self, obj_id: int, user_id: str) -> bool:
         """Check if user owns this record"""
@@ -268,49 +251,10 @@ class VersionsService:
             raise
 
     async def update(self, obj_id: int, update_data: Dict[str, Any], user_id: Optional[str] = None, *, commit: bool = True) -> Optional[Versions]:
-        """Update versions (requires ownership)"""
-        try:
-            obj = await self.get_by_id(obj_id, user_id=user_id)
-            if not obj:
-                logger.warning(f"Versions {obj_id} not found for update")
-                return None
-            if 'project_id' in update_data and update_data['project_id'] != obj.project_id:
-                raise HTTPException(status_code=400, detail="不能将已有记录移动到其他项目。")
-            await require_project(self.db, obj.project_id, user_id)
-            for key, value in update_data.items():
-                if hasattr(obj, key) and key != 'user_id':
-                    setattr(obj, key, value)
-
-            if commit:
-                await self.db.commit()
-            else:
-                await self.db.flush()
-            await self.db.refresh(obj)
-            logger.info(f"Updated versions {obj_id}")
-            return obj
-        except Exception as e:
-            await self.db.rollback()
-            logger.error(f"Error updating versions {obj_id}: {str(e)}")
-            raise
+        raise HTTPException(status_code=409, detail="请使用生成任务接口，versions 由服务端统一管理。")
 
     async def delete(self, obj_id: int, user_id: Optional[str] = None, *, commit: bool = True) -> bool:
-        """Delete versions (requires ownership)"""
-        try:
-            obj = await self.get_by_id(obj_id, user_id=user_id)
-            if not obj:
-                logger.warning(f"Versions {obj_id} not found for deletion")
-                return False
-            await self.db.delete(obj)
-            if commit:
-                await self.db.commit()
-            else:
-                await self.db.flush()
-            logger.info(f"Deleted versions {obj_id}")
-            return True
-        except Exception as e:
-            await self.db.rollback()
-            logger.error(f"Error deleting versions {obj_id}: {str(e)}")
-            raise
+        raise HTTPException(status_code=409, detail="请使用生成任务接口，versions 由服务端统一管理。")
 
     async def get_by_field(self, field_name: str, field_value: Any) -> Optional[Versions]:
         """Get versions by any field"""

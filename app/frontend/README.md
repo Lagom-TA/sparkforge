@@ -66,6 +66,10 @@ pnpm run build
 
 ## SparkForge deployment verification
 
-Source edits alone do not prove that production serves a new frontend bundle. Build the frontend with `pnpm build`, verify that `dist/index.html` and `dist/blog/index.html` reference the generated assets, then publish and check the actual script filename and user flows in production. On 2026-09-06, the reviewed build entry is `index-Dt0JROIC.js`; model JSON syntax and schema validation share one bounded repair attempt.
+Run `pnpm typecheck`, `pnpm lint`, `pnpm test:review`, and `pnpm build` before publishing. Upload the reviewed source and built assets together, verify both dist HTML entry points, and check the actual production script hash after publication.
 
-The frontend retains non-streaming generation with a 180-second client timeout. Production streaming did not return headers within 30 seconds even with an immediate initial event; switching the frontend to SSE was reverted. Long builds still hit the platform 120-second proxy timeout. Backend authentication, output diagnostics, bounded token budget and optional SSE support remain. Resolve the platform streaming/long-request path before claiming end-to-end generation success.
+Generation uses `/api/v1/generation-jobs`: durable admission followed by bounded planning, AppSpec, and source steps. A model step has a 70-second total budget; the step route has an 85-second budget; the browser waits at most 95 seconds. A disconnected browser does not write failure over server state. Restore the saved task to resume unfinished steps. Closing all pages does not schedule future steps automatically.
+
+Apply backend migration `20260908_generation_jobs` before enabling the new frontend. It creates the task metadata table and a unique project/version-number index without deleting existing versions. All generation and version writes now go through the task API, so deploy the backend and frontend together. Keep old assets for cached HTML during rollout.
+
+Acceptance requires a real deployed plan → approval → build → cloud CRUD → refresh → share workflow. Local model stubs, type checks, or a successful platform build alone are insufficient. Downloaded model source is an independent demonstration; the platform preview runs the validated AppSpec against cloud records.

@@ -1,5 +1,5 @@
 """Authentication must run before any billable AI service is constructed."""
-from unittest.mock import Mock
+from unittest.mock import Mock, AsyncMock
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
@@ -21,6 +21,7 @@ async def test_stream_starts_before_waiting_on_provider(monkeypatch):
     import asyncio
     from schemas.aihub import ChatMessage, GenTxtRequest
     provider = Mock()
+    provider.client.close = AsyncMock()
     provider.gentxt_stream = Mock(side_effect=RuntimeError('not started yet'))
     monkeypatch.setattr(aihub, 'AIHubService', lambda: provider)
     response = await aihub.generate_text(GenTxtRequest(messages=[ChatMessage(role='user',content='synthetic')],stream=True))

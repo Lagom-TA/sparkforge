@@ -86,7 +86,7 @@ class GenImgRequest(BaseModel):
         default="auto",
         description="Image quality (only for text-to-image; ignored when `image` is provided).",
     )
-    n: int = Field(default=1, description="Number of images to generate (1-4).")
+    n: int = Field(default=1, ge=1, le=4, description="Number of images to generate (1-4).")
     response_format: str = Field(default="url", description="default response format")
 
 
@@ -207,7 +207,8 @@ class TranscribeAudioRequest(BaseModel):
 
     audio: str = Field(
         ...,
-        description="Audio source. Supports absolute path, http(s) URL, or base64 data URI.",
+        max_length=20 * 1024 * 1024 + 128,
+        description="Uploaded audio as a base64 data URI; paths and URLs are rejected.",
     )
     model: str = Field(
         default="scribe_v2",

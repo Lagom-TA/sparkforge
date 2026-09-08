@@ -40,12 +40,12 @@ import {
   listShareLinks,
   listVersions,
   revokeShareLink,
-  updateProject,
 } from '@/lib/sparkforge';
 import {
   buildProject,
   GenerationInterruptedError,
   markGenerationInterrupted,
+  resumeGeneration,
   planProject,
   saveEditedPlan,
   TaskControl,
@@ -163,7 +163,7 @@ function WorkspaceSession() {
         setTaskMessage(latest.public_log.at(-1)?.message ?? '');
         if (latest.status === 'running' && !runningRef.current) {
           setBusy('');
-          setTaskMessage('页面曾在任务运行时离开。为避免重复写入，请从安全阶段恢复。');
+          setTaskMessage('任务已保存。点击恢复可查询进度并继续未完成的步骤。');
         }
       }
       return { nextProject, nextVersions, generations };
@@ -221,6 +221,7 @@ function WorkspaceSession() {
       } catch (planError) {
         if (token === runTokenRef.current && !(planError instanceof GenerationInterruptedError)) {
           setError(getErrorMessage(planError));
+          await load();
         }
       } finally {
         if (token === runTokenRef.current) { runningRef.current = false; setBusy(''); }
@@ -272,6 +273,7 @@ function WorkspaceSession() {
     } catch (buildError) {
       if (token === runTokenRef.current && !(buildError instanceof GenerationInterruptedError)) {
         setError(getErrorMessage(buildError));
+        await load();
       }
     } finally {
       if (token === runTokenRef.current) { runningRef.current = false; setBusy(''); }
@@ -285,8 +287,16 @@ function WorkspaceSession() {
     runningRef.current = true;
     setBusy('interrupting');
     try {
-      if (activeTask) setActiveTask(await markGenerationInterrupted(activeTask, control));
-      await updateProject(id, { status: control });
+      if (activeTask) {
+        const result = await markGenerationInterrupted(activeTask, control);
+        setActiveTask(result);
+        if (result.status !== control) {
+          setTaskMessage('任务已完成，保留已保存的结果。');
+          await load();
+          return;
+        }
+      }
+
       setTaskMessage(control === 'paused' ? '已暂停，可补充要求后重新规划。' : '任务已停止。');
       toast.success(control === 'paused' ? '任务已暂停。' : '任务已停止。');
     } catch (interruptError) {
@@ -298,25 +308,32 @@ function WorkspaceSession() {
   };
 
   const resumeTask = async () => {
-    const extra = message.trim();
-    const request = `${project?.initial_prompt ?? ''}${
-      extra ? `\n用户追加要求：${extra}` : ''
-    }`;
-    setMessage('');
-    if (!extra && ['preparing', 'building', 'validating', 'saving'].includes(activeTask?.current_stage ?? '')) {
-      await runBuild();
-    } else {
-      await runPlan(request);
+    if (!activeTask || runningRef.current) return;
+    if (message.trim()) {
+      const extra = message.trim();
+      setMessage('');
+      await runPlan(`${project?.initial_prompt ?? ''}\n用户追加要求：${extra}`);
+      return;
+    }
+    const token = beginRun(activeTask.product_spec ? 'building' : 'planning');
+    try {
+      const result = await resumeGeneration(activeTask, {
+        getControl: () => controlRef.current,
+        isCurrent: () => token === runTokenRef.current,
+        onEvent: (event) => { if (token === runTokenRef.current) applyTaskEvent(event); },
+      });
+      if (token !== runTokenRef.current) return;
+      if (result.version) setSelectedVersion(result.version);
+      if (result.generation.product_spec) setPlan(result.generation.product_spec);
+      await load();
+    } catch (error) {
+      if (token === runTokenRef.current && !(error instanceof GenerationInterruptedError)) setError(getErrorMessage(error));
+    } finally {
+      if (token === runTokenRef.current) { runningRef.current = false; setBusy(''); }
     }
   };
 
-  const retryTask = async () => {
-    if (['preparing', 'building', 'validating', 'saving'].includes(activeTask?.current_stage ?? '')) {
-      await runBuild();
-    } else {
-      await runPlan(activeTask?.request_text || project?.initial_prompt || '');
-    }
-  };
+  const retryTask = resumeTask;
 
   const sendMessage = async () => {
     const nextMessage = message.trim();

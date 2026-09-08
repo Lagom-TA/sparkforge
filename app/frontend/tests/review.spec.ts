@@ -69,39 +69,23 @@ test('desktop and mobile layouts stay within viewport', async ({page}) => {
   }
 });
 
-test('stale planning failure cannot overwrite the newer project state', async ({page}) => {
-  await page.goto('http://127.0.0.1:4317/tests/preview.html');
-  const result = await page.evaluate(async () => {
-    const harness = await import('/tests/generation-harness.ts');
-    return harness.interruptedPlanDoesNotOverwrite();
-  });
-  expect(result.projectWrites).toEqual([{status:'planning'}]);
-  expect(result.generationWrites.some((write: any) => write.status === 'failed')).toBe(false);
-});
-
-test('building saves its approved blueprint before requesting the model', async ({page}) => {
-  await page.goto('http://127.0.0.1:4317/tests/preview.html');
-  const writes = await page.evaluate(async () => {
-    const harness = await import('/tests/generation-harness.ts');
-    return harness.buildPersistsApprovedPlan();
-  });
-  expect(writes[0].product_spec.title).toBe('恢复用蓝图');
-  expect(writes.at(-1).status).toBe('failed');
-});
-
-for (const mode of ['repair','invalid','stopped'] as const) {
-  test(`semantic model repair is bounded and respects cancellation: ${mode}`, async ({page}) => {
+for (const mode of ['success','lost','stopped','resume'] as const) {
+  test(`durable task client: ${mode}`, async ({page}) => {
     await page.goto('http://127.0.0.1:4317/tests/preview.html');
     const result = await page.evaluate(async (mode) => {
       const harness = await import('/tests/generation-harness.ts');
-      return harness.semanticBuildRepair(mode);
-    },mode);
-    expect(result.requests).toHaveLength(mode === 'stopped' ? 1 : 2);
-    expect(result.versions).toHaveLength(mode === 'repair' ? 1 : 0);
-    if (mode !== 'stopped') {
-      expect(result.requests[1].messages[1].content).toContain('修复测试蓝图');
-      expect(result.requests[1].messages.at(-1).content).toContain('校验失败');
+      return harness.pipeline(mode);
+    }, mode);
+    expect(result.writes).toEqual([]);
+    expect(result.requests).toHaveLength(2);
+    expect(result.requests[1].url).toContain('/1/step');
+    if (mode === 'resume') expect(result.requests[0].data.action).toBe('resume');
+    else {
+      expect(result.requests[0].data.product_spec.title).toBe('恢复用蓝图');
+      expect(result.requests[0].data.version_number).toBeUndefined();
     }
-    if (mode === 'invalid') expect(result.error).toContain('生成结果无法预览');
+    if (mode === 'success' || mode === 'resume') expect(result.version.version_number).toBe(3);
+    else expect(result.version).toBeUndefined();
+    if (mode === 'lost') expect(result.error).toContain('任务已保存');
   });
 }

@@ -277,6 +277,8 @@ class ProjectsService:
                 return None
             if update_data.get('active_version_id') is not None:
                 await require_version(self.db, update_data['active_version_id'], obj.id, user_id)
+            if 'status' in update_data or 'active_version_id' in update_data:
+                raise HTTPException(status_code=409, detail="项目执行状态与激活版本由生成任务统一管理。")
             for key, value in update_data.items():
                 if hasattr(obj, key) and key != 'user_id':
                     setattr(obj, key, value)

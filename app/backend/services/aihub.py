@@ -103,6 +103,8 @@ class AIHubService:
             self.client = AsyncOpenAI(
                 api_key=settings.app_ai_key,
                 base_url=settings.app_ai_base_url.rstrip("/"),
+                timeout=65.0,
+                max_retries=0,
             )
 
     def _require_ai_client(self) -> "AsyncOpenAI":
@@ -265,7 +267,12 @@ class AIHubService:
                 content_type = meta.strip()
 
         try:
-            return base64.b64decode(b64_data), content_type
+            if len(b64_data) > 20 * 1024 * 1024:
+                raise ValueError("Media exceeds 15 MiB limit")
+            decoded = base64.b64decode(b64_data, validate=True)
+            if len(decoded) > 15 * 1024 * 1024:
+                raise ValueError("Media exceeds 15 MiB limit")
+            return decoded, content_type
         except Exception as e:
             raise InvalidImageInputError("Invalid base64 data in data URI.") from e
 
@@ -302,39 +309,23 @@ class AIHubService:
 
     async def _image_str_to_upload_file(self, image: str, name_prefix: str = "image") -> io.BytesIO:
         """
-        Convert image input (base64 data URI or HTTP URL) into an in-memory file object for uploads.
+        Convert uploaded image input (base64 data URI) into an in-memory file object for uploads.
 
         The OpenAI `images.edit` endpoint expects multipart file uploads; we keep the API JSON-only
-        by allowing clients to pass a base64 data URI or HTTP URL, and converting it here.
+        by allowing clients to pass a bounded base64 data URI, and converting it here.
         """
         image = (image or "").strip()
         if not image:
             raise InvalidImageInputError("Input image is empty.")
 
-        # Handle HTTP URL: download content
-        if image.startswith(("http://", "https://")):
-            import httpx
-
-            try:
-                async with httpx.AsyncClient(timeout=60.0, trust_env=True) as client:
-                    resp = await observe_external_http(client.get(image))
-                    resp.raise_for_status()
-                    image_bytes = resp.content
-
-                # Extract filename from URL (fallback if missing)
-                name = image.split("?")[0].rstrip("/").split("/")[-1] or f"{name_prefix}.png"
-                upload = io.BytesIO(image_bytes)
-                upload.name = name  # type: ignore[attr-defined]
-                return upload
-            except Exception as e:
-                raise InvalidImageInputError(f"Failed to download image from URL: {e}") from e
-
         if not image.startswith("data:"):
             raise InvalidImageInputError(
-                "Only base64 data URI or HTTP URL is supported. Example: `data:image/png;base64,...` or `https://...`."
+                "Only base64 data URI is supported. Example: `data:image/png;base64,...` or `https://...`."
             )
 
         image_bytes, content_type = self._parse_data_uri(image)
+        if content_type not in {"image/png", "image/jpeg", "image/webp"}:
+            raise InvalidImageInputError("仅支持 PNG、JPEG 或 WebP 图片。")
 
         upload = io.BytesIO(image_bytes)
         # openai SDK uses this name for multipart filename
@@ -355,6 +346,8 @@ class AIHubService:
         if not images:
             raise InvalidImageInputError("Input image list is empty.")
 
+        if len(images) > 4:
+            raise InvalidImageInputError("最多上传 4 张图片。")
         upload_files: list[io.BytesIO] = []
         for idx, img in enumerate(images):
             if not isinstance(img, str):
@@ -364,7 +357,7 @@ class AIHubService:
 
     async def _audio_str_to_upload_file(self, audio: str, name_prefix: str = "audio") -> io.BytesIO:
         """
-        Convert audio input (base64 data URI, HTTP URL, or absolute path) into an in-memory file object.
+        Convert uploaded audio input (base64 data URI) into an in-memory file object.
 
         This keeps the API JSON-only while still supporting OpenAI-compatible multipart upload semantics.
         """
@@ -372,23 +365,13 @@ class AIHubService:
         if not audio:
             raise InvalidAudioInputError("Input audio is empty.")
 
-        if audio.startswith(("http://", "https://")):
-            import httpx
-
-            try:
-                async with httpx.AsyncClient(timeout=120.0, trust_env=True) as client:
-                    resp = await observe_external_http(client.get(audio))
-                    resp.raise_for_status()
-                    audio_bytes = resp.content
-                name = self._get_source_name(audio, fallback=f"{name_prefix}.mp3")
-                upload = io.BytesIO(audio_bytes)
-                upload.name = name  # type: ignore[attr-defined]
-                return upload
-            except Exception as e:
-                raise InvalidAudioInputError(f"Failed to download audio from URL: {e}") from e
-
         if audio.startswith("data:"):
-            audio_bytes, content_type = self._parse_data_uri(audio)
+            try:
+                audio_bytes, content_type = self._parse_data_uri(audio)
+            except InvalidImageInputError as error:
+                raise InvalidAudioInputError(str(error)) from None
+            if not content_type.startswith("audio/"):
+                raise InvalidAudioInputError("需要音频文件。")
             upload = io.BytesIO(audio_bytes)
             upload.name = self._filename_from_content_type(  # type: ignore[attr-defined]
                 content_type,
@@ -397,17 +380,7 @@ class AIHubService:
             )
             return upload
 
-        path = Path(audio).expanduser()
-        if not path.is_absolute():
-            raise InvalidAudioInputError(
-                "Only absolute path, http(s) URL, or base64 data URI is supported for audio input."
-            )
-        if not path.exists() or not path.is_file():
-            raise FileNotFoundError(f"Audio file not found: {str(path)}")
-
-        upload = io.BytesIO(path.read_bytes())
-        upload.name = path.name  # type: ignore[attr-defined]
-        return upload
+        raise InvalidAudioInputError("仅支持上传的 base64 音频，不接受服务器路径或 URL。")
 
     @staticmethod
     def _extract_transcription_text(resp: object) -> Optional[str]:
@@ -462,7 +435,12 @@ class AIHubService:
                 content_type = meta.strip()
 
         try:
-            return base64.b64decode(b64_data), content_type
+            if len(b64_data) > 20 * 1024 * 1024:
+                raise ValueError("Media exceeds 15 MiB limit")
+            decoded = base64.b64decode(b64_data, validate=True)
+            if len(decoded) > 15 * 1024 * 1024:
+                raise ValueError("Media exceeds 15 MiB limit")
+            return decoded, content_type
         except Exception as exc:
             raise error_cls("Invalid base64 data in data URI.") from exc
 

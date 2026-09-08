@@ -115,6 +115,18 @@ def extract_error_message(error: Any) -> str:
 router = APIRouter(prefix="/api/v1/aihub", tags=["aihub"], dependencies=[Depends(get_current_user)])
 
 
+async def bounded_call(service, operation):
+    """Keep buffered HTTP calls below the deployed proxy deadline."""
+    try:
+        async with asyncio.timeout(75):
+            return await operation
+    except TimeoutError:
+        raise HTTPException(status_code=504, detail="模型本次请求超时，请稍后重试。") from None
+    finally:
+        if service.client:
+            await service.client.close()
+
+
 @router.post("/gentxt")
 async def generate_text(
     request: GenTxtRequest,
@@ -137,22 +149,27 @@ async def generate_text(
             async def event_generator():
                 try:
                     yield json.dumps({"content": ""})
-                    async with asyncio.timeout(300):
+                    async with asyncio.timeout(75):
                         async for content in service.gentxt_stream(request):
                             yield json.dumps({"content": content})
                 except TimeoutError:
-                    yield json.dumps({"content": "[ERROR] 模型生成超过 5 分钟，已停止等待，请稍后重试。"})
+                    yield json.dumps({"content": "[ERROR] 模型本次请求超时，已停止等待，请稍后重试。"})
                 except Exception as e:
                     logger.error(f"Stream error: {e}")
                     yield json.dumps({"content": f"[ERROR] {extract_error_message(e)}"})
+                finally:
+                    if service.client:
+                        await service.client.close()
                 yield "[DONE]"
 
             return EventSourceResponse(event_generator(), media_type="text/event-stream", ping=15)
         else:
             # Non-streaming response
-            response = await service.gentxt(request)
+            response = await bounded_call(service, service.gentxt(request))
             return response
 
+    except HTTPException:
+        raise
     except ValueError as e:
         logger.error(f"AI service configuration error: {e}")
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=extract_error_message(e))
@@ -187,11 +204,13 @@ async def generate_image(
     """
     try:
         service = AIHubService()
-        return await service.genimg(request)
+        return await bounded_call(service, service.genimg(request))
 
     except InvalidImageInputError as e:
         logger.warning(f"Invalid image input: {e}")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except HTTPException:
+        raise
     except ValueError as e:
         logger.error(f"AI service configuration error: {e}")
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=extract_error_message(e))
@@ -216,11 +235,13 @@ async def generate_video(request: GenVideoRequest):
     """
     try:
         service = AIHubService()
-        return await service.genvideo(request)
+        return await bounded_call(service, service.genvideo(request))
 
     except InvalidImageInputError as e:
         logger.warning(f"Invalid image input: {e}")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except HTTPException:
+        raise
     except ValueError as e:
         logger.error(f"AI service configuration error: {e}")
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=extract_error_message(e))
@@ -244,8 +265,10 @@ async def generate_audio(request: GenAudioRequest):
     """
     try:
         service = AIHubService()
-        return await service.genaudio(request)
+        return await bounded_call(service, service.genaudio(request))
 
+    except HTTPException:
+        raise
     except ValueError as e:
         logger.error(f"AI service configuration error: {e}")
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=extract_error_message(e))
@@ -262,16 +285,18 @@ async def transcribe_audio(request: TranscribeAudioRequest):
     Transcribe audio to text using OpenAI-compatible transcription models.
 
     Parameters:
-    - audio: audio source. Supports absolute path, http(s) URL, or base64 data URI
+    - audio: audio source. Accepts only an uploaded base64 data URI
     - model: STT model name (default: scribe_v2)
     """
     try:
         service = AIHubService()
-        return await service.transcribe(request)
+        return await bounded_call(service, service.transcribe(request))
 
     except (InvalidAudioInputError, FileNotFoundError) as e:
         logger.warning(f"Invalid audio transcription input: {e}")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except HTTPException:
+        raise
     except ValueError as e:
         logger.error(f"AI service configuration error: {e}")
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=extract_error_message(e))
@@ -290,11 +315,13 @@ async def analyze_pdf(request: AnalyzePdfRequest):
     """
     try:
         service = AIHubService()
-        return await service.analyze_pdf(request)
+        return await bounded_call(service, service.analyze_pdf(request))
 
     except InvalidPdfInputError as e:
         logger.warning(f"Invalid PDF analysis input: {e}")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except HTTPException:
+        raise
     except ValueError as e:
         logger.error(f"AI service configuration error: {e}")
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=extract_error_message(e))
