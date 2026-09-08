@@ -18,6 +18,8 @@ from models.generation_jobs import GenerationJob
 from schemas.aihub import ChatMessage, GenTxtRequest
 from services.aihub import AIHubService
 from services import generation_contracts as contract
+from services.source_export import export_source
+from openai import APITimeoutError
 
 logger = logging.getLogger(__name__)
 STEP_SECONDS = 70
@@ -158,7 +160,7 @@ class Jobs:
         except Exception as error:
             logger.warning('Generation %s stage %s failed (%s)', generation_id, stage, type(error).__name__)
             value = None
-            failure = '模型本次步骤超时，可重试当前步骤。' if isinstance(error, TimeoutError) else '本次生成未通过校验或模型暂不可用，请重试当前步骤。'
+            failure = '模型本次步骤超时，可重试当前步骤。' if isinstance(error, (TimeoutError, APITimeoutError)) else '本次生成未通过校验或模型暂不可用，请重试当前步骤。'
         else:
             failure = None
         project = await self.lock_project(project_id)
@@ -199,6 +201,8 @@ class Jobs:
 
 
 async def generate_stage(stage, request_text, product_spec, payload):
+    if stage == 'source':
+        return contract.source(export_source(payload['app_spec']))
     if stage == 'plan':
         schema = '{"title":"名称","summary":"目标","audience":"用户","features":[{"name":"功能","description":"说明","priority":"P0"}],"pages":[{"name":"页面","purpose":"用途"}],"entities":[{"name":"实体","fields":["字段"]}],"acceptance":["验收条件"],"outOfScope":["不包含"]}'
         prompt = f'将需求转成简洁中文 JSON 蓝图。功能至少3项、页面至少2项、实体至少1个、验收至少3条、范围外至少1条。不要输出源码。格式：{schema}\n需求：{request_text}'
@@ -208,8 +212,7 @@ async def generate_stage(stage, request_text, product_spec, payload):
         prompt = f'根据蓝图输出完整的 AppSpec JSON，不要输出源码。格式：{schema}。每集合2至6字段，最多3集合；字段类型 text/textarea/number/date/select/boolean；select 必须有非重复 options；视图仅 table/cards 且引用有效字段。统计 metric 仅 count/completed/pending。蓝图：{json.dumps(product_spec, ensure_ascii=False)}'
         model, validate, tokens = 'deepseek-v4-pro', contract.app_spec, 4096
     else:
-        prompt = f'根据应用定义输出 JSON {{"files":{{"src/App.tsx":"完整 React 源码","src/index.css":"样式"}}}}。只包含这两个文件；源码精简完整，React 默认导出 App，无外部依赖、网络请求或任意 HTML。实现结构对应的本地记录增删改查，localStorage 持久化；这是可下载独立演示源码，平台预览使用云端记录。不要重复输出 AppSpec。应用定义：{json.dumps(payload["app_spec"], ensure_ascii=False)}'
-        model, validate, tokens = 'deepseek-v4-pro', contract.source, 6000
+        raise ValueError('Unknown generation stage')
     service = AIHubService()
     try:
         async with asyncio.timeout(STEP_SECONDS):

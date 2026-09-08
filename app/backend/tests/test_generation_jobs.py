@@ -173,3 +173,14 @@ async def test_stage_deadline_cancels_slow_provider(monkeypatch):
     monkeypatch.setattr(module,'STEP_SECONDS',0.01)
     with pytest.raises(TimeoutError): await module.generate_stage('plan','synthetic',None,{})
     assert entered.is_set()
+
+@pytest.mark.asyncio
+async def test_source_export_does_not_call_provider(monkeypatch):
+    monkeypatch.setattr(module, 'AIHubService', lambda: pytest.fail('source export must not call provider'))
+    result = await module.generate_stage('source', 'ignored', PLAN, {'app_spec': SPEC})
+    assert set(result['files']) == {'src/App.tsx', 'src/index.css'}
+    assert 'export default function App' in result['files']['src/App.tsx']
+    assert 'localStorage.setItem' in result['files']['src/App.tsx']
+    hostile = {**SPEC, 'app': {'name': '</script><script>alert(1)</script>', 'description': 'test'}}
+    result = await module.generate_stage('source', '', PLAN, {'app_spec': hostile})
+    assert '<script>' not in result['files']['src/App.tsx']

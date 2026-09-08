@@ -72,4 +72,10 @@ Generation uses `/api/v1/generation-jobs`: durable admission followed by bounded
 
 Apply backend migration `20260908_generation_jobs` before enabling the new frontend. It creates the task metadata table and a unique project/version-number index without deleting existing versions. All generation and version writes now go through the task API, so deploy the backend and frontend together. Keep old assets for cached HTML during rollout.
 
-Acceptance requires a real deployed plan → approval → build → cloud CRUD → refresh → share workflow. Local model stubs, type checks, or a successful platform build alone are insufficient. Downloaded model source is an independent demonstration; the platform preview runs the validated AppSpec against cloud records.
+Acceptance requires a real deployed plan → approval → build → cloud CRUD → refresh → share workflow. Local model stubs, type checks, or a successful platform build alone are insufficient. Downloaded template source is an independent demonstration; the platform preview runs the validated AppSpec against cloud records.
+
+Reviewed release entry: `index-DtqG3V_t.js` (source commit `cab6618`).
+
+Deployment HTML entrypoints are uploaded directly; verify the served script hash before release.
+
+The source step now renders a deterministic React CRUD template from validated AppSpec, without an additional model request.
