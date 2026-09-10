@@ -41,3 +41,8 @@
 - 禁用 thinking 后两次真实源码及时返回，但均以 Markdown HTML 围栏包裹，触发 incomplete_document。失败证据来自任务7内部保存的11924字符原文：完整 html/head/body，末尾为代码围栏；任务按三次上限停止，没有隐藏失败或重置次数。
 - 模型源码输出统一为 JSON SourceBundle，显式使用供应商 JSON 模式后解析、校验。删除原始 HTML 输出路径，不增加双协议兼容或放松文档/隔离校验。参数见 [DeepSeek JSON Output](https://api-docs.deepseek.com/guides/json_mode/)。
 - 增加同步/流式 JSON 参数传输测试和非 JSON 源码拒绝测试；默认调用不附加 response_format。
+
+## v36 全阶段结构化输出
+
+- 新任务8在 spec 首次尝试返回1028字符的前置中文说明加JSON围栏（SHA256 3f5fc09ffb9676b0b2bbf9c69e03b2a7c816dc7893f8abc88f9a2e1ea3c889da），尚未执行source。统一 plan/spec/source 使用JSON模式和严格系统输出提示，避免只在源码阶段约束格式。
+- 三阶段参数边界均有覆盖；保留严格契约，不以截取说明后的JSON或替换字段掩盖失败。

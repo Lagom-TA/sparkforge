@@ -42,6 +42,7 @@ async def test_actual_generation_adapter_produces_interactive_source(monkeypatch
     provider=SimpleNamespace(client=None,gentxt=AsyncMock(side_effect=[SimpleNamespace(content=json.dumps(HTML)),SimpleNamespace(content=json.dumps({'files':{'index.html':GAME}}))]))
     monkeypatch.setattr(jobs,'AIHubService',lambda:provider)
     spec=await jobs.generate_stage('spec','2048',PLAN,{})
+    assert provider.gentxt.call_args.args[0].response_format=='json_object'
     source=await jobs.generate_stage('source','2048',PLAN,{'app_spec':spec})
     assert source['files']['index.html']==GAME
     assert provider.gentxt.call_args.args[0].max_tokens==16384
@@ -77,3 +78,11 @@ async def test_source_requires_json_file_bundle(monkeypatch, content):
     diagnostic, failed=diagnose(error.value)
     assert diagnostic['code']=='invalid_json'
     assert failed==content
+
+
+@pytest.mark.asyncio
+async def test_plan_uses_same_structured_output_protocol(monkeypatch):
+    provider=SimpleNamespace(client=None,gentxt=AsyncMock(return_value=SimpleNamespace(content=json.dumps(PLAN))))
+    monkeypatch.setattr(jobs,'AIHubService',lambda:provider)
+    assert await jobs.generate_stage('plan','2048',None,{}) == PLAN
+    assert provider.gentxt.call_args.args[0].response_format=='json_object'
