@@ -28,3 +28,10 @@
 - 同一原始需求、模型、4096 token 上限和 AIHubService.gentxt 的 A/B：原提示词 65.431 秒 APITimeoutError；追加精炼输出要求 42.559 秒返回 1637 字符、1035 completion tokens，并通过 Product 契约。该单次对比支持输出规模影响耗时，不能据此保证长期成功率。
 - 补修：蓝图明确短描述、3–6 项核心功能和3–5项验收；HTML 源码要求复用逻辑和样式、减少冗余装饰与注释，同时完整实现所需功能。保留原有超时、重试上限和严格校验。
 - 修正版继续部署与端到端验收，完成前不得把发布状态记为成功。
+
+## v34 构建阶段限时补修
+
+- 原任务6跨 v33→v34 恢复并成功生成蓝图；任务7 AppSpec 通过，source仍在客户端65秒超时。
+- DeepSeek [官方参数文档](https://api-docs.deepseek.com/guides/thinking_mode/)说明默认开启 high thinking。
+- 云端 source 对比使用同一任务输入，并追加精简结构、12000字符输出目标：low 思考65.394秒超时；thinking disabled 34.811秒返回9691字符、3371 completion tokens，finish_reason=stop，源码契约通过。此结果仍需浏览器玩法验证。
+- 构建阶段明确使用 thinking disabled，规划模型保持原有设置；可选参数未指定时仍不向供应商发送。同步与流式调用都传递正确的 extra_body，增加两项传输边界回归。HTML单页游戏/工具增加简洁输出目标，完整功能仍是要求；服务端源码上限与隔离校验没有放宽。

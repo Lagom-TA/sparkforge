@@ -51,6 +51,7 @@ class GenTxtRequest(BaseModel):
     model: str = Field(default="deepseek-v4-pro", description="Model name")
     stream: bool = Field(default=False, description="Whether to enable streaming output.")
     temperature: Optional[float] = Field(default=None, ge=0, le=2, description="Optional sampling temperature; omit to use the model default.")
+    thinking_mode: Optional[Literal["enabled", "disabled"]] = Field(default=None, description="DeepSeek thinking mode; omit to leave the provider default.")
     max_tokens: int = Field(default=16384, ge=1, le=32768, description="Maximum generated tokens, including reasoning tokens where applicable.")
 
 

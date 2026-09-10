@@ -27,6 +27,7 @@ async def test_default_temperature_is_omitted():
     request = GenTxtRequest(model='gpt-6-astra', messages=[ChatMessage(role='user',content='test')])
     await service_with(create).gentxt(request)
     assert 'temperature' not in create.call_args.kwargs
+    assert 'extra_body' not in create.call_args.kwargs
 
 @pytest.mark.asyncio
 async def test_explicit_temperature_is_preserved():
@@ -43,6 +44,7 @@ async def test_streaming_also_omits_default_temperature():
     request = GenTxtRequest(model='gpt-6-astra', messages=[ChatMessage(role='user',content='test')],stream=True)
     assert [chunk async for chunk in service_with(create).gentxt_stream(request)] == ['ok']
     assert 'temperature' not in create.call_args.kwargs
+    assert 'extra_body' not in create.call_args.kwargs
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(('content', 'reason', 'expected'), [('', 'length', 'token 上限'), ('partial', 'length', 'token 上限'), ('', 'stop', '未返回正文'), ('', 'content_filter', '内容过滤')])
@@ -72,3 +74,20 @@ async def test_stream_rejects_partial_response_and_closes(reason):
     with pytest.raises(RuntimeError):
         _ = [chunk async for chunk in service.gentxt_stream(request)]
     stream.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('streaming', [False, True])
+async def test_explicit_thinking_mode_reaches_provider(streaming):
+    async def chunks():
+        yield SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content='ok'))])
+    result = MockStream(chunks()) if streaming else SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content='ok'))], usage=None)
+    create = AsyncMock(return_value=result)
+    service = service_with(create)
+    request = GenTxtRequest(model='deepseek-v4-pro', messages=[ChatMessage(role='user', content='test')], thinking_mode='disabled', stream=streaming)
+    if streaming:
+        assert [chunk async for chunk in service.gentxt_stream(request)] == ['ok']
+    else:
+        assert (await service.gentxt(request)).content == 'ok'
+    assert create.call_args.kwargs['extra_body'] == {'thinking': {'type': 'disabled'}}
+    assert 'temperature' not in create.call_args.kwargs
