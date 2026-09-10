@@ -145,6 +145,7 @@ class AIHubService:
                     messages=messages,
                     **({"temperature": request.temperature} if request.temperature is not None else {}),
                     **({"extra_body": {"thinking": {"type": request.thinking_mode}}} if request.thinking_mode is not None else {}),
+                    **({"response_format": {"type": request.response_format}} if request.response_format is not None else {}),
                     max_tokens=request.max_tokens,
                     stream=False,
                 )
@@ -199,6 +200,7 @@ class AIHubService:
                     messages=messages,
                     **({"temperature": request.temperature} if request.temperature is not None else {}),
                     **({"extra_body": {"thinking": {"type": request.thinking_mode}}} if request.thinking_mode is not None else {}),
+                    **({"response_format": {"type": request.response_format}} if request.response_format is not None else {}),
                     max_tokens=request.max_tokens,
                     stream=True,
                 )

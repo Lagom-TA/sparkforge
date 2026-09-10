@@ -39,12 +39,13 @@ def test_external_document_dependencies_rejected(extra):
 
 @pytest.mark.asyncio
 async def test_actual_generation_adapter_produces_interactive_source(monkeypatch):
-    provider=SimpleNamespace(client=None,gentxt=AsyncMock(side_effect=[SimpleNamespace(content=json.dumps(HTML)),SimpleNamespace(content=GAME)]))
+    provider=SimpleNamespace(client=None,gentxt=AsyncMock(side_effect=[SimpleNamespace(content=json.dumps(HTML)),SimpleNamespace(content=json.dumps({'files':{'index.html':GAME}}))]))
     monkeypatch.setattr(jobs,'AIHubService',lambda:provider)
     spec=await jobs.generate_stage('spec','2048',PLAN,{})
     source=await jobs.generate_stage('source','2048',PLAN,{'app_spec':spec})
-    assert source['files']['index.html']==GAME.strip()
+    assert source['files']['index.html']==GAME
     assert provider.gentxt.call_args.args[0].max_tokens==16384
+    assert provider.gentxt.call_args.args[0].response_format=='json_object'
 
 
 @pytest.mark.asyncio
@@ -64,3 +65,15 @@ def test_explicit_null_does_not_cross_the_typescript_contract(field):
     if field=='columns': value['views'][0]['columns']=None
     else: value['collections'][0]['fields'][0]['options']=None
     with pytest.raises(contracts.ContractError): contracts.app_spec(value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('content', [GAME, '```html\n'+GAME+'\n```'])
+async def test_source_requires_json_file_bundle(monkeypatch, content):
+    provider=SimpleNamespace(client=None,gentxt=AsyncMock(return_value=SimpleNamespace(content=content)))
+    monkeypatch.setattr(jobs,'AIHubService',lambda:provider)
+    with pytest.raises(StageError) as error:
+        await jobs.generate_stage('source','2048',PLAN,{'app_spec':HTML})
+    diagnostic, failed=diagnose(error.value)
+    assert diagnostic['code']=='invalid_json'
+    assert failed==content

@@ -35,3 +35,9 @@
 - DeepSeek [官方参数文档](https://api-docs.deepseek.com/guides/thinking_mode/)说明默认开启 high thinking。
 - 云端 source 对比使用同一任务输入，并追加精简结构、12000字符输出目标：low 思考65.394秒超时；thinking disabled 34.811秒返回9691字符、3371 completion tokens，finish_reason=stop，源码契约通过。此结果仍需浏览器玩法验证。
 - 构建阶段明确使用 thinking disabled，规划模型保持原有设置；可选参数未指定时仍不向供应商发送。同步与流式调用都传递正确的 extra_body，增加两项传输边界回归。HTML单页游戏/工具增加简洁输出目标，完整功能仍是要求；服务端源码上限与隔离校验没有放宽。
+
+## v35 源码输出协议补修
+
+- 禁用 thinking 后两次真实源码及时返回，但均以 Markdown HTML 围栏包裹，触发 incomplete_document。失败证据来自任务7内部保存的11924字符原文：完整 html/head/body，末尾为代码围栏；任务按三次上限停止，没有隐藏失败或重置次数。
+- 模型源码输出统一为 JSON SourceBundle，显式使用供应商 JSON 模式后解析、校验。删除原始 HTML 输出路径，不增加双协议兼容或放松文档/隔离校验。参数见 [DeepSeek JSON Output](https://api-docs.deepseek.com/guides/json_mode/)。
+- 增加同步/流式 JSON 参数传输测试和非 JSON 源码拒绝测试；默认调用不附加 response_format。
