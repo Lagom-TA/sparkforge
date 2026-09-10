@@ -51,3 +51,17 @@ test('exported HTML includes a working standalone storage adapter',async({page})
   await page.setContent(exported);
   await expect(page.locator('body')).toContainText('12');
 });
+
+
+test('new active version keeps a working runtime after read-only status changes',async({page})=>{
+  await page.goto('http://127.0.0.1:4317/tests/html.html?readonly');
+  await expect(page.getByRole('status')).toContainText('应用已启动');
+  await page.getByRole('button',{name:'切换版本写入权限'}).click();
+  await expect(page.getByRole('status')).toContainText('应用已启动');
+  const app=page.frameLocator('iframe');
+  await app.getByRole('grid').focus();
+  await page.keyboard.press('ArrowLeft');
+  await expect(app.locator('#score')).toHaveText('8');
+  await expect.poll(()=>page.evaluate(()=>(window as any).fixture.saves())).toBe(1);
+  await expect(page.getByRole('alert')).toHaveCount(0);
+});

@@ -12,7 +12,7 @@ export default function HtmlPreview({ html, title, versionId, readOnly = false }
   const [running, setRunning] = useState(true);
   const [height, setHeight] = useState(680);
   const frame = useRef<HTMLIFrameElement>(null);
-  const channel = useMemo(() => crypto.randomUUID(), [html, versionId, run]);
+  const channel = useMemo(() => crypto.randomUUID(), [html, versionId, readOnly, run]);
   const document = useMemo(() => sandboxDocument(html, channel), [html, channel]);
   useEffect(() => {
     if (!running) return;

