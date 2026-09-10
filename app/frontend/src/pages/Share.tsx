@@ -85,7 +85,7 @@ export default function Share() {
             {snapshot.version.app_spec.app.description}
           </p>
         </div>
-        <AppPreview spec={snapshot.version.app_spec} />
+        <AppPreview spec={snapshot.version.app_spec} sourceBundle={snapshot.version.source_bundle} />
       </section>
     </main>
   );

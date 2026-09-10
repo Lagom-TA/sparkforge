@@ -37,6 +37,8 @@ except Exception:  # noqa: BLE001 - optional across mixed template versions
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
 
+from services.generation_errors import CompletionError
+
 logger = logging.getLogger(__name__)
 
 PDF_ANALYSIS_MODEL = "claude-sonnet-4.6"
@@ -97,12 +99,14 @@ class AIHubService:
 
     def __init__(self):
         self.client: Optional["AsyncOpenAI"] = None
-        if settings.app_ai_base_url and settings.app_ai_key:
+        base_url = getattr(settings, 'app_ai_base_url', None)
+        api_key = getattr(settings, 'app_ai_key', None)
+        if base_url and api_key:
             from openai import AsyncOpenAI
 
             self.client = AsyncOpenAI(
-                api_key=settings.app_ai_key,
-                base_url=settings.app_ai_base_url.rstrip("/"),
+                api_key=api_key,
+                base_url=base_url.rstrip("/"),
                 timeout=65.0,
                 max_retries=0,
             )
@@ -110,7 +114,7 @@ class AIHubService:
     def _require_ai_client(self) -> "AsyncOpenAI":
         """Return the configured AI client or raise a configuration error."""
         if not self.client:
-            raise ValueError("AI service not configured. Set APP_AI_BASE_URL and APP_AI_KEY.")
+            raise CompletionError("provider_configuration", "模型服务尚未配置，请设置服务地址与凭据。")
         return self.client
 
     def _convert_message(self, msg) -> dict:
@@ -146,16 +150,16 @@ class AIHubService:
             )
 
             if not response.choices:
-                raise RuntimeError("模型未返回候选结果，请检查模型服务响应。")
+                raise CompletionError("missing_choices", "模型未返回候选结果，请检查模型服务响应。")
             choice = response.choices[0]
             finish_reason = getattr(choice, "finish_reason", None)
             if finish_reason == "length":
-                raise RuntimeError("模型输出达到 token 上限而被截断，无法作为完整结果使用。")
+                raise CompletionError("output_truncated", "模型输出达到 token 上限而被截断，无法作为完整结果使用。", choice.message.content or "")
             if finish_reason == "content_filter":
-                raise RuntimeError("模型服务未提供可用正文（内容过滤）。")
+                raise CompletionError("content_filter", "模型服务未提供可用正文（内容过滤）。")
             content = choice.message.content or ""
             if not content.strip():
-                raise RuntimeError("模型未返回正文，无法生成应用。请检查模型的输出配置。")
+                raise CompletionError("empty_response", "模型未返回正文，无法生成应用。请检查模型的输出配置。")
             usage = None
             if response.usage:
                 usage = {
@@ -171,7 +175,7 @@ class AIHubService:
             )
 
         except Exception as e:
-            logger.error(f"gentxt error: {e}")
+            logger.error("gentxt failed (%s)", type(e).__name__)
             raise
 
     async def gentxt_stream(self, request: GenTxtRequest) -> AsyncGenerator[str, None]:
@@ -206,15 +210,15 @@ class AIHubService:
                     choice = chunk.choices[0]
                     finish_reason = getattr(choice, "finish_reason", None)
                     if finish_reason == "length":
-                        raise RuntimeError("模型输出达到 token 上限而被截断，无法作为完整结果使用。")
+                        raise CompletionError("output_truncated", "模型输出达到 token 上限而被截断，无法作为完整结果使用。")
                     if finish_reason == "content_filter":
-                        raise RuntimeError("模型服务未提供可用正文（内容过滤）。")
+                        raise CompletionError("content_filter", "模型服务未提供可用正文（内容过滤）。")
                     content = choice.delta.content or ""
                     has_content = has_content or bool(content.strip())
                     if content:
                         yield content
                 if not has_content:
-                    raise RuntimeError("模型未返回正文，无法生成应用。请检查模型的输出配置。")
+                    raise CompletionError("empty_response", "模型未返回正文，无法生成应用。请检查模型的输出配置。")
             finally:
                 await stream.close()
 

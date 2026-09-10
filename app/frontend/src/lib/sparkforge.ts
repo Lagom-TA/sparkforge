@@ -32,14 +32,22 @@ export interface AppField {
   options?: string[];
 }
 
-export interface AppSpec {
+export interface CrudSpec {
+  runtime: 'crud';
   app: { name: string; description: string };
   navigation: string[];
-  dashboard: Array<{ label: string; value?: string; metric?: 'count' | 'completed' | 'pending'; trend?: string }>;
+  dashboard: Array<{ label: string; metric: 'count' | 'completed' | 'pending' }>;
   collections: Array<{ key: string; label: string; fields: AppField[] }>;
-  views: Array<{ type: 'table' | 'cards' | 'board' | 'form'; collection: string; title: string; columns?: string[] }>;
+  views: Array<{ type: 'table' | 'cards'; collection: string; title: string; columns?: string[] }>;
   primaryAction: string;
 }
+
+export interface HtmlSpec {
+  runtime: 'html';
+  app: { name: string; description: string };
+  requirements: string[];
+}
+export type AppSpec = CrudSpec | HtmlSpec;
 
 export interface SourceBundle {
   files: Record<string, string>;
@@ -144,37 +152,6 @@ export async function listGenerations(projectId: number) {
   );
 }
 
-export async function createGeneration(
-  projectId: number,
-  requestText: string,
-  stage: string,
-  status = 'running',
-) {
-  return data<Generation>(
-    await client.entities.generations.create({
-      data: {
-        project_id: projectId,
-        request_text: requestText,
-        status,
-        current_stage: stage,
-        public_log: [{
-          at: new Date().toISOString(),
-          stage,
-          actor: 'System',
-          level: 'info',
-          message: '任务已创建，正在准备上下文',
-        }],
-      },
-    }),
-  );
-}
-
-export async function updateGeneration(id: number, patch: Partial<Generation>) {
-  return data<Generation>(
-    await client.entities.generations.update({ id: String(id), data: patch }),
-  );
-}
-
 export async function listVersions(projectId: number) {
   return items<Version>(
     await client.entities.versions.query({
@@ -185,37 +162,20 @@ export async function listVersions(projectId: number) {
   );
 }
 
-export async function createVersion(
-  projectId: number,
-  versionNumber: number,
-  productSpec: ProductSpec,
-  appSpec: AppSpec,
-  sourceBundle: SourceBundle,
-  changeSummary: string,
-) {
-  return data<Version>(
-    await client.entities.versions.create({
-      data: {
-        project_id: projectId,
-        version_number: versionNumber,
-        product_spec: productSpec,
-        app_spec: appSpec,
-        source_bundle: sourceBundle,
-        change_summary: changeSummary,
-      },
-    }),
-  );
-}
-
 export async function listAppRecords(projectId: number, collectionKey: string) {
-  const records = items<AppRecord>(
-    await client.entities.app_records.query({
-      query: { project_id: projectId, collection_key: collectionKey, is_deleted: false },
-      sort: '-updated_at',
-      limit: 200,
-    }),
-  );
-  return records.filter((record) => !record.is_deleted);
+  const records: AppRecord[] = [];
+  let before: number | undefined;
+  for (;;) {
+    const page = items<AppRecord>(await client.entities.app_records.query({
+      query: {project_id: projectId, collection_key: collectionKey, is_deleted: false, ...(before === undefined ? {} : {id: {$lt: before}})},
+      sort: '-id', limit: 500,
+    }));
+    records.push(...page);
+    if (page.length < 500) return records.filter(record => !record.is_deleted);
+    const cursor = page.at(-1)!.id;
+    if (records.length >= 10000 || (before !== undefined && cursor >= before)) throw new Error('记录超出当前预览容量或分页异常，无法显示完整统计。');
+    before = cursor;
+  }
 }
 
 export async function createAppRecord(
@@ -281,7 +241,7 @@ export async function revokeShareLink(id: number) {
 
 export interface PublicShareSnapshot {
   project: Pick<Project, 'id' | 'name' | 'status'>;
-  version: Pick<Version, 'id' | 'version_number' | 'app_spec' | 'change_summary' | 'created_at'>;
+  version: Pick<Version, 'id' | 'version_number' | 'app_spec' | 'source_bundle' | 'change_summary' | 'created_at'>;
 }
 
 export async function getPublicShare(projectId: number, token: string) {

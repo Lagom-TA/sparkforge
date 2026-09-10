@@ -5,7 +5,7 @@ from typing import List, Optional
 from datetime import datetime, date
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
@@ -47,8 +47,7 @@ class ProjectsResponse(BaseModel):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ProjectsListResponse(BaseModel):
@@ -120,7 +119,7 @@ async def query_projectss(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Error querying projectss: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(status_code=500, detail="服务暂时不可用，请稍后重试。")
 
 
 @router.get("/{id}", response_model=ProjectsResponse)
@@ -145,7 +144,7 @@ async def get_projects(
         raise
     except Exception as e:
         logger.error(f"Error fetching projects {id}: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(status_code=500, detail="服务暂时不可用，请稍后重试。")
 
 
 @router.post("", response_model=ProjectsResponse, status_code=201)
@@ -173,7 +172,7 @@ async def create_projects(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Error creating projects: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(status_code=500, detail="服务暂时不可用，请稍后重试。")
 
 
 @router.post("/batch", response_model=List[ProjectsResponse], status_code=201)
@@ -266,7 +265,7 @@ async def update_projects(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Error updating projects {id}: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(status_code=500, detail="服务暂时不可用，请稍后重试。")
 
 
 @router.delete("/batch")
@@ -321,4 +320,4 @@ async def delete_projects(
         raise
     except Exception as e:
         logger.error(f"Error deleting projects {id}: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(status_code=500, detail="服务暂时不可用，请稍后重试。")

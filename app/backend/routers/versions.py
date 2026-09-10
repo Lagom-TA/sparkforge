@@ -5,7 +5,7 @@ from typing import List, Optional
 from datetime import datetime, date
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
@@ -53,8 +53,7 @@ class VersionsResponse(BaseModel):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class VersionsListResponse(BaseModel):
@@ -126,7 +125,7 @@ async def query_versionss(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Error querying versionss: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(status_code=500, detail="服务暂时不可用，请稍后重试。")
 
 
 @router.get("/{id}", response_model=VersionsResponse)
@@ -151,7 +150,7 @@ async def get_versions(
         raise
     except Exception as e:
         logger.error(f"Error fetching versions {id}: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(status_code=500, detail="服务暂时不可用，请稍后重试。")
 
 
 @router.post("", response_model=VersionsResponse, status_code=201)
@@ -179,7 +178,7 @@ async def create_versions(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Error creating versions: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(status_code=500, detail="服务暂时不可用，请稍后重试。")
 
 
 @router.post("/batch", response_model=List[VersionsResponse], status_code=201)
@@ -272,7 +271,7 @@ async def update_versions(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Error updating versions {id}: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(status_code=500, detail="服务暂时不可用，请稍后重试。")
 
 
 @router.delete("/batch")
@@ -327,4 +326,4 @@ async def delete_versions(
         raise
     except Exception as e:
         logger.error(f"Error deleting versions {id}: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(status_code=500, detail="服务暂时不可用，请稍后重试。")

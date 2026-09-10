@@ -5,7 +5,7 @@ from typing import List, Optional
 from datetime import datetime, date
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
@@ -50,8 +50,7 @@ class Share_linksResponse(BaseModel):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class Share_linksListResponse(BaseModel):
@@ -123,7 +122,7 @@ async def query_share_linkss(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Error querying share_linkss: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(status_code=500, detail="服务暂时不可用，请稍后重试。")
 
 
 @router.get("/{id}", response_model=Share_linksResponse)
@@ -148,7 +147,7 @@ async def get_share_links(
         raise
     except Exception as e:
         logger.error(f"Error fetching share_links {id}: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(status_code=500, detail="服务暂时不可用，请稍后重试。")
 
 
 @router.post("", response_model=Share_linksResponse, status_code=201)
@@ -176,7 +175,7 @@ async def create_share_links(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Error creating share_links: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(status_code=500, detail="服务暂时不可用，请稍后重试。")
 
 
 @router.post("/batch", response_model=List[Share_linksResponse], status_code=201)
@@ -269,7 +268,7 @@ async def update_share_links(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Error updating share_links {id}: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(status_code=500, detail="服务暂时不可用，请稍后重试。")
 
 
 @router.delete("/batch")
@@ -324,4 +323,4 @@ async def delete_share_links(
         raise
     except Exception as e:
         logger.error(f"Error deleting share_links {id}: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(status_code=500, detail="服务暂时不可用，请稍后重试。")

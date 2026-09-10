@@ -5,7 +5,7 @@ from typing import List, Optional
 from datetime import datetime, date
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
@@ -56,8 +56,7 @@ class GenerationsResponse(BaseModel):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class GenerationsListResponse(BaseModel):
@@ -129,7 +128,7 @@ async def query_generationss(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Error querying generationss: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(status_code=500, detail="服务暂时不可用，请稍后重试。")
 
 
 @router.get("/{id}", response_model=GenerationsResponse)
@@ -154,7 +153,7 @@ async def get_generations(
         raise
     except Exception as e:
         logger.error(f"Error fetching generations {id}: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(status_code=500, detail="服务暂时不可用，请稍后重试。")
 
 
 @router.post("", response_model=GenerationsResponse, status_code=201)
@@ -182,7 +181,7 @@ async def create_generations(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Error creating generations: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(status_code=500, detail="服务暂时不可用，请稍后重试。")
 
 
 @router.post("/batch", response_model=List[GenerationsResponse], status_code=201)
@@ -275,7 +274,7 @@ async def update_generations(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Error updating generations {id}: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(status_code=500, detail="服务暂时不可用，请稍后重试。")
 
 
 @router.delete("/batch")
@@ -330,4 +329,4 @@ async def delete_generations(
         raise
     except Exception as e:
         logger.error(f"Error deleting generations {id}: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(status_code=500, detail="服务暂时不可用，请稍后重试。")

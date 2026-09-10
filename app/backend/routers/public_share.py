@@ -69,6 +69,7 @@ async def get_public_share(
             "id": version.id,
             "version_number": version.version_number,
             "app_spec": version.app_spec,
+            "source_bundle": version.source_bundle if version.app_spec.get("runtime") == "html" else {"files": {}},
             "change_summary": version.change_summary,
             "created_at": version.created_at,
         },

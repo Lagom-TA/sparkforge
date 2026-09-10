@@ -12,14 +12,14 @@ export async function pipeline(mode: 'success'|'lost'|'stopped'|'resume') {
     if (request.url.endsWith('/step')) {
       if (mode==='lost') throw new Error('network unavailable');
       if (mode==='stopped') current=false;
-      return {data:{generation:{...generation,status:'succeeded'},status:'succeeded',stage:'source',kind:'build',version:{id:8,version_number:3}}} as any;
+      return {data:{generation:{...generation,status:'succeeded'},status:'succeeded',stage:'source',kind:'build',version:{id:8,version_number:3,app_spec:{runtime:'html',app:{name:'test',description:'test'},requirements:['test']},source_bundle:{files:{'index.html':'<html><head></head><body>test</body></html>'}}}}} as any;
     }
     return {data:{generation,status:'pending',stage:'source',kind:'build'}} as any;
   };
   let error='';let version:any;
   try {
     if(mode==='resume') version=(await resumeGeneration(generation,{isCurrent:()=>current})).version;
-    else version=await buildProject(1,plan,999,'test',{isCurrent:()=>current});
+    else version=await buildProject(1,plan,'test',{isCurrent:()=>current});
   } catch(e){error=String(e);}
   return {requests,writes,error,version};
 }

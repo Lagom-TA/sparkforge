@@ -30,7 +30,8 @@ const statusText: Record<string, string> = {
   planning: '正在规划',
   awaiting_approval: '等待确认',
   building: '正在构建',
-  ready: '可继续',
+  ready: '已验收',
+  awaiting_verification: '待验收',
   failed: '需要处理',
 };
 

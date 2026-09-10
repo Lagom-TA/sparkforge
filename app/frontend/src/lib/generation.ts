@@ -1,5 +1,5 @@
 import { client, Generation, ProductSpec, Version, getErrorMessage } from '@/lib/sparkforge';
-import { validatePlan } from '@/lib/spec-validation';
+import { validatePlan, validateBuild } from '@/lib/spec-validation';
 
 export type TaskControl = 'running' | 'paused' | 'stopped';
 export interface TaskEvent { generation: Generation; stage: string; progress: number; message: string }
@@ -34,7 +34,13 @@ async function execute(job: Job, controls: GenerationControls): Promise<Job> {
   for (;;) {
     assertRunning(controls);
     emit(job, controls);
-    if (['succeeded', 'awaiting_approval'].includes(job.status)) return job;
+    if (['succeeded', 'awaiting_approval'].includes(job.status)) {
+      if (job.version) {
+        const validated = validateBuild({appSpec: job.version.app_spec, files: job.version.source_bundle.files});
+        job.version = {...job.version, app_spec: validated.appSpec, source_bundle: validated.sourceBundle};
+      }
+      return job;
+    }
     if (job.status === 'paused' || job.status === 'stopped') throw new GenerationInterruptedError(job.status);
     if (job.status === 'failed') throw new Error(job.generation.error_message || '生成失败，可重试当前步骤。');
     try {
@@ -69,7 +75,7 @@ export async function planProject(projectId: number, request: string, controls: 
   const result = await start(projectId, 'plan', request, undefined, controls);
   return validatePlan(result.generation.product_spec);
 }
-export async function buildProject(projectId: number, spec: ProductSpec, _nextVersion: number, summary: string, controls: GenerationControls = {}) {
+export async function buildProject(projectId: number, spec: ProductSpec, summary: string, controls: GenerationControls = {}) {
   const result = await start(projectId, 'build', summary, validatePlan(spec), controls);
   if (!result.version) throw new Error('任务尚未生成版本。');
   return result.version;
@@ -78,14 +84,7 @@ export async function resumeGeneration(generation: Generation, controls: Generat
   if (generation.status === 'stopped') {
     return start(generation.project_id, generation.product_spec ? 'build' : 'plan', generation.request_text, generation.product_spec, controls);
   }
-  let job: Job;
-  try {
-    job = await call<Job>(`/${generation.id}/control`, 'POST', { action: 'resume' });
-  } catch (error) {
-    if ((error as { response?: { status?: number } }).response?.status !== 404) throw error;
-    // Pre-migration rows have no lease metadata. Start a new managed task.
-    return start(generation.project_id, generation.product_spec ? 'build' : 'plan', generation.request_text, generation.product_spec, controls);
-  }
+  const job = await call<Job>(`/${generation.id}/control`, 'POST', { action: 'resume' });
   return execute(job, controls);
 }
 export async function markGenerationInterrupted(generation: Generation, control: 'paused' | 'stopped') {

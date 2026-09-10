@@ -23,6 +23,8 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import AppPreview from '@/components/AppPreview';
+import VersionAcceptance from '@/components/VersionAcceptance';
+import { downloadSource } from '@/lib/source-download';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -251,7 +253,6 @@ function WorkspaceSession() {
       const version = await buildProject(
         id,
         plan,
-        (versions[0]?.version_number ?? 0) + 1,
         versions.length ? '根据对话继续优化' : '初始版本',
         {
           getControl: () => (token === runTokenRef.current ? controlRef.current : 'stopped'),
@@ -750,20 +751,22 @@ function WorkspaceSession() {
                     </div>
                   </div>
                   <div className={`mx-auto transition-[max-width] duration-300 ${previewMode === 'mobile' ? 'max-w-[390px]' : 'max-w-none'}`}>
-                    <AppPreview key={`${selectedVersion.id}-${previewKey}`} spec={selectedVersion.app_spec} projectId={id} readOnly={selectedVersion.id !== project.active_version_id} compact={previewMode === 'mobile'} confirmDeletion={preferences.confirmRecordDeletion} errorNotifications={preferences.errorNotifications} />
+                    <VersionAcceptance key={selectedVersion.id} versionId={selectedVersion.id} criteria={selectedVersion.product_spec.acceptance} readOnly={selectedVersion.id !== project.active_version_id} onVerified={() => {void load();}} />
+                    <AppPreview key={`${selectedVersion.id}-${previewKey}`} spec={selectedVersion.app_spec} sourceBundle={selectedVersion.source_bundle} versionId={selectedVersion.id} projectId={id} readOnly={selectedVersion.id !== project.active_version_id} compact={previewMode === 'mobile'} confirmDeletion={preferences.confirmRecordDeletion} errorNotifications={preferences.errorNotifications} />
                   </div>
                 </TabsContent>
                 <TabsContent value="source" className="mt-3">
                   <div className="overflow-hidden rounded-xl border bg-[#18181b] text-zinc-100">
                     <div className="flex h-11 items-center justify-between border-b border-white/10 px-4">
-                      <span className="flex items-center gap-2 text-xs text-zinc-400"><FileCode2 className="h-4 w-4" />src/App.tsx</span>
-                      <Button variant="ghost" size="sm" className="text-zinc-300 hover:bg-white/10 hover:text-white" onClick={() => {
-                        void navigator.clipboard.writeText(selectedVersion.source_bundle.files['src/App.tsx'] || '');
-                        toast.success('源码已复制。');
+                      <span className="flex items-center gap-2 text-xs text-zinc-400"><FileCode2 className="h-4 w-4" />{selectedVersion.app_spec.runtime === 'html' ? 'index.html' : 'src/App.tsx'}</span>
+                      <Button variant="ghost" size="sm" className="text-zinc-300" onClick={() => downloadSource(selectedVersion)}>下载源码</Button>
+                      <Button variant="ghost" size="sm" className="text-zinc-300 hover:bg-white/10 hover:text-white" onClick={async () => {
+                        try { await navigator.clipboard.writeText(selectedVersion.source_bundle.files[selectedVersion.app_spec.runtime === 'html' ? 'index.html' : 'src/App.tsx'] || '');
+                        toast.success('源码已复制。'); } catch {toast.error('复制失败，请手动选择源码复制。');}
                       }}><Copy className="mr-2 h-4 w-4" />复制</Button>
                     </div>
                     <pre className="max-h-[calc(100vh-9rem)] overflow-auto p-5 text-xs leading-6">
-                      <code>{selectedVersion.source_bundle.files['src/App.tsx'] || JSON.stringify(selectedVersion.source_bundle.files, null, 2)}</code>
+                      <code>{selectedVersion.source_bundle.files[selectedVersion.app_spec.runtime === 'html' ? 'index.html' : 'src/App.tsx'] || JSON.stringify(selectedVersion.source_bundle.files, null, 2)}</code>
                     </pre>
                   </div>
                 </TabsContent>

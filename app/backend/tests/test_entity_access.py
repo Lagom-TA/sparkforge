@@ -137,7 +137,7 @@ async def test_public_share_is_minimal_read_only_and_revocable(app):
         assert snapshot.status_code == 200
         assert set(snapshot.json()) == {'project','version'}
         assert 'user_id' not in snapshot.json()['project']
-        assert 'source_bundle' not in snapshot.json()['version']
+        assert snapshot.json()['version']['source_bundle'] == {'files': {}}
         assert (await client.post(url, json={})).status_code == 405
         app.dependency_overrides[get_current_user] = lambda: UserResponse(id='alice', email='alice@example.com')
         assert (await client.put(f'/api/v1/entities/share_links/{share_id}', json={'is_active':False})).status_code == 200

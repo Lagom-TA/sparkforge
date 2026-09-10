@@ -1,8 +1,11 @@
+import HtmlPreview from './HtmlPreview';
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AppField,
   AppRecord,
   AppSpec,
+  CrudSpec,
+  SourceBundle,
   createAppRecord,
   deleteAppRecord,
   getErrorMessage,
@@ -70,7 +73,28 @@ function FieldControl({
   );
 }
 
-export default function AppPreview({
+interface PreviewProps {
+  spec: AppSpec;
+  sourceBundle: SourceBundle;
+  versionId?: number;
+  projectId?: number;
+  compact?: boolean;
+  readOnly?: boolean;
+  confirmDeletion?: boolean;
+  errorNotifications?: boolean;
+}
+
+export default function AppPreview(props: PreviewProps) {
+  if (props.spec.runtime === 'html') {
+    const html = props.sourceBundle.files['index.html'];
+    if (!html) return <p role="alert">此版本缺少 HTML 源码，请重新生成。</p>;
+    return <HtmlPreview html={html} title={props.spec.app.name} versionId={props.versionId} readOnly={props.readOnly} />;
+  }
+  if (props.spec.runtime !== 'crud') return <p role="alert">应用契约无效，请重新生成。</p>;
+  return <CrudPreview {...props} spec={props.spec} />;
+}
+
+function CrudPreview({
   spec,
   projectId,
   compact = false,
@@ -78,16 +102,18 @@ export default function AppPreview({
   confirmDeletion = true,
   errorNotifications = true,
 }: {
-  spec: AppSpec;
+  spec: CrudSpec;
   projectId?: number;
   compact?: boolean;
   readOnly?: boolean;
   confirmDeletion?: boolean;
   errorNotifications?: boolean;
 }) {
-  const [collectionKey, setCollectionKey] = useState(spec.collections[0]?.key);
-  const collection = spec.collections.find((item) => item.key === collectionKey) ?? spec.collections[0];
-  const fields = collection?.fields ?? [];
+  const [viewIndex, setViewIndex] = useState(0);
+  const view = spec.views[viewIndex];
+  const collection = spec.collections.find((item) => item.key === view.collection)!;
+  const fields = collection.fields;
+  const displayFields = view.columns === undefined ? fields : view.columns.map(key => fields.find(field => field.key === key)!);
   const [records, setRecords] = useState<AppRecord[]>([]);
   const [loading, setLoading] = useState(Boolean(projectId));
   const [saving, setSaving] = useState(false);
@@ -258,22 +284,22 @@ export default function AppPreview({
       <div className={compact ? 'block' : 'grid lg:grid-cols-[140px_1fr]'}>
         {!compact && (
           <aside className="border-r border-stone-200 bg-[#efede6] p-3">
-            {spec.collections.map((item) => (
-              <button type="button" key={item.key} disabled={saving} onClick={() => setCollectionKey(item.key)} aria-current={item.key === collection?.key ? 'page' : undefined} className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm ${item.key === collection?.key ? 'bg-[#fffefa] font-medium' : 'text-stone-600 hover:bg-stone-200'}`}>
-                <LayoutDashboard className="h-4 w-4 shrink-0" />{item.label}
+            {spec.views.map((item, index) => (
+              <button type="button" key={index} disabled={saving} onClick={() => setViewIndex(index)} aria-current={index === viewIndex ? 'page' : undefined} className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm ${index === viewIndex ? 'bg-[#fffefa] font-medium' : 'text-stone-600 hover:bg-stone-200'}`}>
+                <LayoutDashboard className="h-4 w-4 shrink-0" />{spec.navigation[index]}
               </button>
             ))}
           </aside>
         )}
 
         <main className="min-w-0 p-4 sm:p-5">
-          {compact && spec.collections.length > 1 && <select aria-label="选择集合" value={collection?.key} disabled={saving} onChange={(event) => setCollectionKey(event.target.value)} className="mb-4 w-full rounded-md border bg-background p-2 text-base">{spec.collections.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}</select>}
+          {compact && spec.views.length > 1 && <select aria-label="选择页面" value={viewIndex} disabled={saving} onChange={(event) => setViewIndex(Number(event.target.value))} className="mb-4 w-full rounded-md border bg-background p-2 text-base">{spec.views.map((item, index) => <option key={index} value={index}>{spec.navigation[index]}</option>)}</select>}
           {projectId && readOnly && <p className="mb-4 text-sm text-stone-600">正在查看历史版本。记录来自当前项目，请回到活动版本编辑。</p>}
           {!projectId && <p className="mb-4 text-sm text-stone-600">只读应用结构预览，业务记录不公开。</p>}
           {loadError && <div role="alert" className="mb-4 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800">{loadError}<Button type="button" variant="ghost" size="sm" disabled={loading} onClick={() => void load()}>重新加载</Button></div>}
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <h2 className="text-lg font-semibold">{collection?.label ?? '记录'}</h2>
+              <h2 className="text-lg font-semibold">{view.title}</h2>
               <p className="mt-1 max-w-xl text-sm text-stone-500">{spec.app.description}</p>
             </div>
             <Button type="button" size="sm" onClick={openCreate} disabled={!projectId || readOnly || saving || loading || !!loadError}>
@@ -281,15 +307,12 @@ export default function AppPreview({
             </Button>
           </div>
 
-          <div className="mt-5 grid gap-3 sm:grid-cols-2">
-            <div className="rounded-lg border border-stone-200 bg-[#fffefa] p-4">
-              <p className="text-xs text-stone-500">全部记录</p>
-              <p className="mt-1 text-2xl font-semibold tabular-nums">{records.length}</p>
-            </div>
-            <div className="rounded-lg border border-stone-200 bg-[#fffefa] p-4">
-              <p className="text-xs text-stone-500">当前结果</p>
-              <p className="mt-1 text-2xl font-semibold tabular-nums">{filtered.length}</p>
-            </div>
+          <div className="mt-5 flex flex-wrap gap-6">
+            {spec.dashboard.map((metric, index) => {
+              const completed = records.filter(record => fields.some(field => field.type === 'boolean' && record.data[field.key] === true)).length;
+              const value = metric.metric === 'count' ? records.length : metric.metric === 'completed' ? completed : records.length - completed;
+              return <div key={index}><p className="text-xs text-stone-500">{metric.label}</p><p className="mt-1 text-2xl font-semibold tabular-nums">{value}</p></div>;
+            })}
           </div>
 
           {filterField && (
@@ -322,12 +345,21 @@ export default function AppPreview({
                   {(query || filter !== '全部') && <Button type="button" variant="ghost" onClick={() => { setQuery(''); setFilter('全部'); }}>清除筛选</Button>}
                 </div>
               </div>
+            ) : view.type === 'table' ? (
+              <div className="overflow-x-auto"><table className="w-full text-left text-sm">
+                <caption className="sr-only">{view.title}</caption>
+                <thead><tr>{displayFields.map(field => <th scope="col" key={field.key} className="p-3">{field.label}</th>)}{projectId && !readOnly && <th scope="col" className="p-3">操作</th>}</tr></thead>
+                <tbody>{filtered.map(record => <tr key={record.id} className="border-t border-stone-200">
+                  {displayFields.map(field => <td key={field.key} className="max-w-64 break-words p-3">{field.type === 'boolean' ? (record.data[field.key] ? '是' : '否') : String(record.data[field.key] ?? '—')}</td>)}
+                  {projectId && !readOnly && <td className="whitespace-nowrap p-3"><Button size="sm" variant="ghost" aria-label="编辑记录" disabled={saving || deleting.includes(record.id)} onClick={() => openEdit(record)}>编辑</Button><Button size="sm" variant="ghost" aria-label="删除记录" disabled={saving || deleting.includes(record.id)} onClick={() => void remove(record)}>删除</Button></td>}
+                </tr>)}</tbody>
+              </table></div>
             ) : (
               <div className="divide-y divide-stone-100">
                 {filtered.map((record) => (
                   <article key={record.id} className="group flex items-start justify-between gap-3 p-4 transition-colors hover:bg-stone-50">
                     <div className="grid min-w-0 flex-1 gap-x-5 gap-y-2 sm:grid-cols-2">
-                      {fields.map((field) => (
+                      {displayFields.map((field) => (
                         <div key={field.key} className="min-w-0">
                           <p className="text-[11px] text-stone-400">{field.label}</p>
                           <p className="mt-0.5 truncate text-sm">
@@ -343,7 +375,7 @@ export default function AppPreview({
                         <button type="button" disabled={deleting.includes(record.id) || saving} onClick={() => openEdit(record)} className="rounded-md p-2 text-stone-500 hover:bg-stone-100 hover:text-stone-800" aria-label="编辑记录">
                           <Edit3 className="h-3.5 w-3.5" />
                         </button>
-                        <button type="button" disabled={deleting.includes(record.id) || saving} onClick={() => void remove(record)} className="rounded-md p-2 text-stone-500 hover:bg-red-50 hover:text-red-700" aria-label="删除记录">
+                        <button type="button" disabled={deleting.includes(record.id) || saving} onClick={() => void remove(record)} className="rounded-md p-2 text-red-700 hover:bg-red-50 hover:text-red-800" aria-label="删除记录">
                           {deleting.includes(record.id) ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
                         </button>
                       </div>

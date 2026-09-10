@@ -8,15 +8,18 @@ from fastapi import HTTPException
 from sqlalchemy import select, func, text
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from models.projects import Projects
+from models.app_records import App_records
 from models.generations import Generations
 from models.versions import Versions
 from models.generation_jobs import GenerationJob
+from models.runtime_state import RuntimeState
+from models.version_verification import VersionVerification
 from services.generation_jobs import Jobs, now
 from services import generation_jobs as module
 from services import generation_contracts as contracts
 
 PLAN = dict(title='任务管理',summary='管理记录',audience='团队',features=[dict(name=str(i),description='管理',priority='P0') for i in range(3)],pages=[dict(name=str(i),purpose='查看') for i in range(2)],entities=[dict(name='任务',fields=['名称'])],acceptance=['新增','修改','删除'],outOfScope=['支付'])
-SPEC = dict(app=dict(name='任务',description='任务管理'),navigation=['记录'],dashboard=[dict(label='记录',metric='count')],collections=[dict(key='tasks',label='任务',fields=[dict(key='title',label='名称',type='text'),dict(key='done',label='完成',type='boolean')])],views=[dict(type='table',collection='tasks',title='任务',columns=['title','done'])],primaryAction='新增')
+SPEC = dict(runtime='crud',app=dict(name='任务',description='任务管理'),navigation=['记录'],dashboard=[dict(label='记录',metric='count')],collections=[dict(key='tasks',label='任务',fields=[dict(key='title',label='名称',type='text'),dict(key='done',label='完成',type='boolean')])],views=[dict(type='table',collection='tasks',title='任务',columns=['title','done'])],primaryAction='新增')
 SOURCE = {'files': {'src/App.tsx': 'export default function App(){return null;}'}}
 
 @pytest.fixture
@@ -28,7 +31,7 @@ async def sessions():
     parsed=make_url(url)
     assert parsed.host in ('127.0.0.1','localhost') and parsed.database=='sparkforge_test', 'Refuse non-local or non-test database'
     engine=create_async_engine(url)
-    tables=[Projects.__table__,Generations.__table__,Versions.__table__,GenerationJob.__table__]
+    tables=[Projects.__table__,Generations.__table__,Versions.__table__,GenerationJob.__table__,RuntimeState.__table__,VersionVerification.__table__,App_records.__table__]
     async with engine.begin() as connection:
         for table in reversed(tables): await connection.run_sync(lambda conn,t=table:t.drop(conn,checkfirst=True))
         for table in tables: await connection.run_sync(lambda conn,t=table:t.create(conn))
@@ -184,3 +187,74 @@ async def test_source_export_does_not_call_provider(monkeypatch):
     hostile = {**SPEC, 'app': {'name': '</script><script>alert(1)</script>', 'description': 'test'}}
     result = await module.generate_stage('source', '', PLAN, {'app_spec': hostile})
     assert '<script>' not in result['files']['src/App.tsx']
+
+@pytest.mark.asyncio
+async def test_failed_contract_diagnostic_is_bounded_and_retries_stop(sessions,monkeypatch):
+    from services.generation_errors import StageError
+    job=await start(sessions,'build')
+    monkeypatch.setattr(module,'generate_stage',AsyncMock(side_effect=StageError(contracts.ContractError('views.0.type','unsupported'), 'private-output')))
+    async with sessions() as db:
+        jobs=Jobs(db,'alice');ident=job['generation']['id']
+        for attempt in range(1,4):
+            if attempt>1: await jobs.control(ident,'resume')
+            failed=await jobs.step(ident)
+            assert failed['status']=='failed'
+            assert failed['diagnostic']['path']=='views.0.type'
+            assert failed['diagnostic']['attempt']==attempt
+            assert 'private-output' not in str(failed)
+        with pytest.raises(HTTPException) as error: await jobs.control(ident,'resume')
+        assert error.value.status_code==409
+        assert (await jobs.find(ident)).payload['failed_response']=='private-output'
+
+@pytest.mark.asyncio
+async def test_concurrent_runtime_saves_cannot_overwrite_each_other(sessions):
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+    from core.database import get_db
+    from dependencies.auth import get_current_user
+    from schemas.auth import UserResponse
+    from routers.runtime_state import router
+    async with sessions() as db:
+        version=Versions(user_id='alice',project_id=1,version_number=1,app_spec={'runtime':'html'},product_spec=PLAN,source_bundle={'files':{}},change_summary='test')
+        db.add(version);await db.flush()
+        project=await db.get(Projects,1);project.active_version_id=version.id
+        ident=version.id;await db.commit()
+    app=FastAPI();app.include_router(router)
+    async def database():
+        async with sessions() as db: yield db
+    app.dependency_overrides[get_db]=database
+    app.dependency_overrides[get_current_user]=lambda:UserResponse(id='alice',email='alice@example.com')
+    async with AsyncClient(transport=ASGITransport(app=app),base_url='http://test') as client:
+        results=await asyncio.gather(*[client.put(f'/api/v1/runtime-state/{ident}',json={'revision':0,'state':{'score':score}}) for score in (8,16)])
+        assert sorted(result.status_code for result in results)==[200,409]
+        assert (await client.get(f'/api/v1/runtime-state/{ident}')).json()['revision']==1
+
+@pytest.mark.asyncio
+async def test_build_cannot_publish_a_contract_that_hides_existing_data(sessions,monkeypatch):
+    job=await start(sessions,'build')
+    async with sessions() as db:
+        db.add(App_records(user_id='alice',project_id=1,collection_key='important',record_key='record-1',data={'title':'keep'},is_deleted=False))
+        await db.commit()
+        monkeypatch.setattr(module,'generate_stage',AsyncMock(side_effect=[SPEC,SOURCE]))
+        jobs=Jobs(db,'alice');ident=job['generation']['id']
+        await jobs.step(ident)
+        failed=await jobs.step(ident)
+        assert failed['status']=='failed'
+        assert failed['diagnostic']['code']=='data_conflict'
+        assert not failed['diagnostic']['retryable']
+        assert await db.scalar(select(func.count()).select_from(Versions))==0
+        assert await db.scalar(select(func.count()).select_from(App_records))==1
+
+@pytest.mark.asyncio
+async def test_expired_lease_cannot_bypass_attempt_limit(sessions,monkeypatch):
+    job=await start(sessions)
+    async with sessions() as db:
+        jobs=Jobs(db,'alice');ident=job['generation']['id'];row=await jobs.find(ident)
+        row.status='running';row.lease_until=now()-timedelta(seconds=1)
+        row.payload={**row.payload,'attempts':{'plan':3}}
+        await db.commit()
+        monkeypatch.setattr(module,'generate_stage',AsyncMock(side_effect=AssertionError('must not call provider')))
+        result=await jobs.step(ident)
+        assert result['status']=='failed'
+        assert result['diagnostic']['code']=='attempt_limit'
+        module.generate_stage.assert_not_called()

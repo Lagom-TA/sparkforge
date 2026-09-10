@@ -1,96 +1,177 @@
-"""Validate model output before saving any executable product contract."""
+"""Strict executable contracts; errors contain paths, never model/user values."""
 import json
 import re
+from html.parser import HTMLParser
+from typing import Annotated, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
+
+Text = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=8000)]
+Key = Annotated[str, StringConstraints(pattern=r'^[a-z][a-z0-9_]{0,63}$')]
 
 
-def text(value):
-    if not isinstance(value, str) or not value.strip() or len(value) > 8000:
-        raise ValueError("需要非空且长度合理的文本")
-    return value.strip()
+class ContractError(ValueError):
+    def __init__(self, path, rule, code='invalid_contract'):
+        self.path, self.rule, self.code = path, rule, code
+        super().__init__(f'{path}: {rule}')
 
 
-def sequence(value, minimum=1, maximum=30):
-    if not isinstance(value, list) or not minimum <= len(value) <= maximum:
-        raise ValueError("列表长度不符合要求")
-    return value
+class StrictModel(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+
+
+class Feature(StrictModel):
+    name: Text
+    description: Text
+    priority: Literal['P0', 'P1']
+
+
+class Page(StrictModel):
+    name: Text
+    purpose: Text
+
+
+class Entity(StrictModel):
+    name: Text
+    fields: list[Text] = Field(min_length=1, max_length=30)
+
+
+class Product(StrictModel):
+    title: Text
+    summary: Text
+    audience: Text
+    features: list[Feature] = Field(min_length=3, max_length=30)
+    pages: list[Page] = Field(min_length=1, max_length=30)
+    entities: list[Entity] = Field(max_length=30)
+    acceptance: list[Text] = Field(min_length=3, max_length=30)
+    outOfScope: list[Text] = Field(min_length=1, max_length=30)
+
+
+class App(StrictModel):
+    name: Text
+    description: Text
+
+
+class Metric(StrictModel):
+    label: Text
+    metric: Literal['count', 'completed', 'pending']
+
+
+class AppField(StrictModel):
+    key: Key
+    label: Text
+    type: Literal['text', 'textarea', 'number', 'date', 'select', 'boolean']
+    required: bool = False
+    options: list[Text] = Field(default_factory=list, max_length=30)
+
+
+class Collection(StrictModel):
+    key: Key
+    label: Text
+    fields: list[AppField] = Field(min_length=2, max_length=6)
+
+
+class View(StrictModel):
+    type: Literal['table', 'cards']
+    collection: Key
+    title: Text
+    columns: list[Key] = Field(default_factory=list, max_length=30)
+
+
+class Spec(StrictModel):
+    runtime: Literal['crud']
+    app: App
+    navigation: list[Text] = Field(min_length=1, max_length=30)
+    dashboard: list[Metric] = Field(max_length=30)
+    collections: list[Collection] = Field(max_length=8)
+    views: list[View] = Field(max_length=30)
+    primaryAction: Text
+
+
+class HtmlSpec(StrictModel):
+    runtime: Literal['html']
+    app: App
+    requirements: list[Text] = Field(min_length=1, max_length=30)
+
+
+def validate(model, value):
+    try:
+        return model.model_validate(value).model_dump(exclude_unset=True)
+    except ValidationError as error:
+        issue = error.errors(include_input=False, include_context=False, include_url=False)[0]
+        path = '.'.join(map(str, issue['loc'])) or '$'
+        raise ContractError(path, issue['type']) from None
 
 
 def plan(value):
-    if not isinstance(value, dict):
-        raise ValueError("蓝图必须是对象")
-    result = {key: text(value.get(key)) for key in ('title', 'summary', 'audience')}
-    for key, fields, minimum in [('features', ('name', 'description', 'priority'), 3), ('pages', ('name', 'purpose'), 2), ('entities', ('name', 'fields'), 1)]:
-        result[key] = []
-        for item in sequence(value.get(key), minimum):
-            if not isinstance(item, dict):
-                raise ValueError("蓝图条目必须是对象")
-            row = {field: [text(v) for v in sequence(item.get(field))] if field == 'fields' else text(item.get(field)) for field in fields}
-            if key == 'features' and row['priority'] not in ('P0', 'P1'):
-                raise ValueError("功能优先级必须为 P0/P1")
-            result[key].append(row)
-    for key, minimum in [('acceptance', 3), ('outOfScope', 1)]:
-        result[key] = [text(v) for v in sequence(value.get(key), minimum)]
-    return result
-
-
-def key(value):
-    value = text(value)
-    if not re.fullmatch(r'[a-z][a-z0-9_]{0,63}', value):
-        raise ValueError("字段或集合键格式错误")
-    return value
+    return validate(Product, value)
 
 
 def app_spec(value):
-    if not isinstance(value, dict) or not isinstance(value.get('app'), dict):
-        raise ValueError("缺少应用定义")
-    result = {'app': {k: text(value['app'].get(k)) for k in ('name', 'description')}, 'navigation': [text(v) for v in sequence(value.get('navigation'))], 'primaryAction': text(value.get('primaryAction')), 'dashboard': [], 'collections': [], 'views': []}
-    for item in sequence(value.get('dashboard'), 0):
-        if not isinstance(item, dict) or item.get('metric') not in ('count', 'completed', 'pending'):
-            raise ValueError("统计指标不支持")
-        result['dashboard'].append({'label': text(item.get('label')), 'metric': item['metric']})
+    if isinstance(value, dict) and value.get('runtime') == 'html':
+        return validate(HtmlSpec, value)
+    result = validate(Spec, value)
+    if not result['collections'] or not result['views']:
+        raise ContractError('collections/views', 'CRUD 应用至少需要一个集合和视图')
     collections = {}
-    for item in sequence(value.get('collections'), 1, 8):
-        if not isinstance(item, dict):
-            raise ValueError("集合必须是对象")
-        name = key(item.get('key'))
-        if name in collections:
-            raise ValueError("集合键重复")
-        fields = []
-        for field in sequence(item.get('fields'), 2, 6):
-            if not isinstance(field, dict) or field.get('type') not in ('text', 'textarea', 'number', 'date', 'select', 'boolean'):
-                raise ValueError("字段类型不支持")
-            row = {'key': key(field.get('key')), 'label': text(field.get('label')), 'type': field['type']}
-            if 'required' in field:
-                if type(field['required']) is not bool:
-                    raise ValueError("required 必须是布尔值")
-                row['required'] = field['required']
-            if field['type'] == 'select':
-                row['options'] = [text(v) for v in sequence(field.get('options'))]
-                if len(set(row['options'])) != len(row['options']):
-                    raise ValueError("选项重复")
-            if row['key'] in {f['key'] for f in fields}:
-                raise ValueError("字段键重复")
-            fields.append(row)
-        collections[name] = {f['key'] for f in fields}
-        result['collections'].append({'key': name, 'label': text(item.get('label')), 'fields': fields})
-    for item in sequence(value.get('views')):
-        if not isinstance(item, dict) or item.get('type') not in ('table', 'cards') or item.get('collection') not in collections:
-            raise ValueError("视图引用无效集合")
-        row = {'type': item['type'], 'collection': item['collection'], 'title': text(item.get('title'))}
-        if 'columns' in item:
-            row['columns'] = [key(v) for v in sequence(item['columns'], 0)]
-            if set(row['columns']) - collections[row['collection']]:
-                raise ValueError("视图引用无效字段")
-        result['views'].append(row)
+    for i, collection in enumerate(result['collections']):
+        path = f'collections.{i}'
+        if collection['key'] in collections:
+            raise ContractError(path + '.key', '集合键重复')
+        fields = set()
+        for j, field in enumerate(collection['fields']):
+            fp = f'{path}.fields.{j}'
+            if field['key'] in fields:
+                raise ContractError(fp + '.key', '字段键重复')
+            fields.add(field['key'])
+            options = field.get('options')
+            if field['type'] == 'select' and (not options or len(set(options)) != len(options)):
+                raise ContractError(fp + '.options', '需要非空且不重复的选项')
+            if field['type'] != 'select' and options is not None:
+                raise ContractError(fp + '.options', '只有 select 字段允许 options')
+        collections[collection['key']] = fields
+    for i, view in enumerate(result['views']):
+        if view['collection'] not in collections:
+            raise ContractError(f'views.{i}.collection', '集合不存在')
+        columns = view.get('columns')
+        if columns is not None and (len(set(columns)) != len(columns) or set(columns) - collections[view['collection']]):
+            raise ContractError(f'views.{i}.columns', '字段不存在或重复')
+    if len(result['navigation']) != len(result['views']):
+        raise ContractError('navigation', '导航项必须与视图一一对应')
     return result
 
 
+class Document(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.tags = set()
+
+    def handle_starttag(self, tag, attrs):
+        self.tags.add(tag)
+        attrs = dict(attrs)
+        if tag in ('iframe', 'frame', 'object', 'embed', 'base'):
+            raise ContractError('files.index.html', f'不支持 {tag} 嵌入')
+        if tag == 'script' and (attrs.get('src') or attrs.get('type', '').lower() not in ('', 'text/javascript', 'application/javascript')):
+            raise ContractError('files.index.html', '仅支持内联经典 JavaScript，不支持模块或外部脚本')
+        if tag == 'link' or (tag == 'meta' and attrs.get('http-equiv')):
+            raise ContractError('files.index.html', '请内联样式，不能覆盖运行策略或自动跳转')
+
+
 def source(value):
-    files = value.get('files') if isinstance(value, dict) else None
-    if not isinstance(files, dict) or not isinstance(files.get('src/App.tsx'), str) or not files['src/App.tsx'].strip():
-        raise ValueError("缺少 src/App.tsx")
-    if set(files) - {'src/App.tsx', 'src/index.css'} or any(not isinstance(v, str) or len(v) > 60000 for v in files.values()):
-        raise ValueError("源码文件不符合范围或大小限制")
+    if not isinstance(value, dict) or set(value) != {'files'} or not isinstance(value['files'], dict):
+        raise ContractError('files', '需要源码文件对象')
+    files = value['files']
+    if any(not isinstance(v, str) or not v.strip() or len(v) > 180000 for v in files.values()):
+        raise ContractError('files', '源码为空或超过 180000 字符')
+    if 'index.html' in files:
+        if set(files) != {'index.html'}:
+            raise ContractError('files', 'HTML 应用必须是单文件')
+        parser = Document()
+        parser.feed(files['index.html'])
+        if not {'html', 'head', 'body'} <= parser.tags or not files['index.html'].rstrip().lower().endswith('</html>'):
+            raise ContractError('files.index.html', '需要完整 html/head/body 文档', 'incomplete_document')
+    elif not files.get('src/App.tsx') or set(files) - {'src/App.tsx', 'src/index.css'}:
+        raise ContractError('files', '缺少 src/App.tsx 或文件范围无效')
     return {'files': files}
 
 
@@ -99,4 +180,16 @@ def parse(content):
     if content.startswith('```'):
         content = re.sub(r'^```(?:json)?\s*', '', content)
         content = re.sub(r'\s*```$', '', content)
-    return json.loads(content)
+    def pairs(items):
+        obj = {}
+        for k, v in items:
+            if k in obj:
+                raise ContractError('$', 'JSON 字段重复', 'invalid_json')
+            obj[k] = v
+        return obj
+    def constant(_):
+        raise ContractError('$', 'JSON 不允许非有限数值', 'invalid_json')
+    try:
+        return json.loads(content, object_pairs_hook=pairs, parse_constant=constant)
+    except json.JSONDecodeError as error:
+        raise ContractError(f'line:{error.lineno}:column:{error.colno}', 'JSON 不完整或语法错误', 'invalid_json') from None

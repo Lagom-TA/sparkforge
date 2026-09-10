@@ -30,11 +30,15 @@ api.update = async ({ id, data }: any) => {
   return { data: records.find((item) => item.id === Number(id)) } as any;
 };
 const spec = {
+  runtime: 'crud' as const,
   app: { name: '项目记录 · 回归测试', description: '验证记录加载、集合切换和编辑反馈。此处使用隔离测试数据。' },
   collections: ['tasks', 'notes'].map((key, index) => ({ key, label: index ? '备忘' : '任务', fields: [
     { key: 'title', label: '标题', type: 'text' as const, required: true },
     { key: 'amount', label: '数量', type: 'number' as const, required: true },
   ] })),
-  navigation: ['任务', '备忘'], dashboard: [], views: [], primaryAction: '新建记录',
+  navigation: ['任务', '备忘'], dashboard: [], views: ['tasks', 'notes'].map(collection => ({type: 'cards' as const, collection, title: collection})), primaryAction: '新建记录',
 };
-createRoot(document.getElementById('fixture')!).render(<div className="mx-auto max-w-5xl p-4"><AppPreview spec={spec} projectId={1} confirmDeletion={false} /></div>);
+if (new URLSearchParams(location.search).has('table')) {
+  Object.assign(spec, {views: [{type: 'table', collection: 'tasks', title: '指定表格', columns: ['title']}], navigation: ['列表页'], dashboard: [{label: '总条数', metric: 'count'}]});
+}
+createRoot(document.getElementById('fixture')!).render(<div className="mx-auto max-w-5xl p-4"><AppPreview spec={spec} sourceBundle={{files: {}}} projectId={1} confirmDeletion={false} /></div>);

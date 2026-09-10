@@ -1,0 +1,17 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>2048 回归样本</title><style>body{font:16px system-ui;background:#faf8ef;color:#514b43;margin:0;padding:20px}main{max-width:440px;margin:auto}#board{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;background:#b5a799;padding:8px;touch-action:none}.tile{aspect-ratio:1;display:grid;place-items:center;background:#eee4da;font-size:28px;font-weight:bold}button{font:inherit;padding:10px;margin:5px}#controls{display:flex;flex-wrap:wrap}</style></head><body><main><h1>2048</h1><p>分数 <output id="score">0</output></p><div id="board" role="grid" aria-label="棋盘" tabindex="0"></div><p id="status" role="status"></p><div id="controls"><button data-dir="left">左</button><button data-dir="up">上</button><button data-dir="down">下</button><button data-dir="right">右</button><button id="restart">重新开始</button></div><p id="error" role="alert"></p></main><script>
+(async()=>{
+let board=Array(16).fill(0),score=0;
+const grid=document.querySelector('#board');
+function spawn(){const empty=board.map((v,i)=>v?null:i).filter(i=>i!==null);if(empty.length)board[empty[Math.floor(Math.random()*empty.length)]]=Math.random()<.9?2:4;}
+function render(){grid.replaceChildren(...board.map(v=>{const cell=document.createElement('div');cell.className='tile';cell.role='gridcell';cell.textContent=String(v||'');return cell;}));document.querySelector('#score').textContent=score;document.querySelector('#status').textContent=board.includes(2048)?'已达到2048':board.every(Boolean)&&!board.some((v,i)=>(i%4<3&&v===board[i+1])||(i<12&&v===board[i+4]))?'游戏结束':'使用方向键、滑动或按钮移动';}
+async function save(){try{await window.sparkforge.saveState({board,score});}catch(e){document.querySelector('#error').textContent=e.message;}}
+function move(direction){const old=board.join(',');for(let line=0;line<4;line++){const indices=Array.from({length:4},(_,i)=>direction==='left'?line*4+i:direction==='right'?line*4+3-i:direction==='up'?i*4+line:(3-i)*4+line);const values=indices.map(i=>board[i]).filter(Boolean),out=[];for(let i=0;i<values.length;i++){if(values[i]===values[i+1]){out.push(values[i]*2);score+=values[i]*2;i++;}else out.push(values[i]);}while(out.length<4)out.push(0);indices.forEach((index,i)=>board[index]=out[i]);}if(board.join(',')!==old){spawn();render();void save();}}
+try{const state=await window.sparkforge.loadState();if(state&&Array.isArray(state.board)&&state.board.length===16){board=state.board;score=state.score;}else{spawn();spawn();}}catch(e){document.querySelector('#error').textContent=e.message;}
+render();
+addEventListener('keydown',e=>{const direction={ArrowLeft:'left',ArrowRight:'right',ArrowUp:'up',ArrowDown:'down'}[e.key];if(direction){e.preventDefault();move(direction);}});
+document.querySelectorAll('[data-dir]').forEach(button=>button.addEventListener('click',()=>move(button.dataset.dir)));
+document.querySelector('#restart').onclick=()=>{board=Array(16).fill(0);score=0;spawn();spawn();render();void save();};
+let start;
+grid.addEventListener('touchstart',e=>{start=e.touches[0];},{passive:true});grid.addEventListener('touchend',e=>{if(!start)return;const dx=e.changedTouches[0].clientX-start.clientX,dy=e.changedTouches[0].clientY-start.clientY;if(Math.max(Math.abs(dx),Math.abs(dy))>20)move(Math.abs(dx)>Math.abs(dy)?dx>0?'right':'left':dy>0?'down':'up');start=null;});
+})();
+</script></body></html>

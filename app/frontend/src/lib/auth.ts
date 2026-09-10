@@ -24,11 +24,11 @@ class RPApi {
       );
       return response.data;
     } catch (error) {
-      if (error.response?.status === 401) {
+      if (axios.isAxiosError(error) && error.response?.status === 401) {
         return null;
       }
       throw new Error(
-        error.response?.data?.detail || 'Failed to get user info'
+        axios.isAxiosError(error) && typeof error.response?.data?.detail === 'string' ? error.response.data.detail : 'Failed to get user info'
       );
     }
   }
@@ -43,7 +43,7 @@ class RPApi {
       window.location.href = response.data.redirect_url;
     } catch (error) {
       throw new Error(
-        error.response?.data?.detail || 'Failed to initiate login'
+        axios.isAxiosError(error) && typeof error.response?.data?.detail === 'string' ? error.response.data.detail : 'Failed to initiate login'
       );
     }
   }
