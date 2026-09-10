@@ -250,6 +250,7 @@ async def generate_stage(stage, request_text, product_spec, payload):
     if stage == 'plan':
         schema = json.dumps(contract.Product.model_json_schema(), ensure_ascii=False)
         prompt = f'将需求转成中文产品蓝图，列出真实可验证的功能。支持两类运行时：云端集合 CRUD，或单文件 HTML/CSS/JavaScript 交互应用（游戏、计算器、画布、工具）。HTML 应用支持版本隔离的云端状态保存，不支持外部网络、第三方登录、支付和自定义服务器；需要这些能力时在范围外明确说明，不假装已实现。单页应用可以只有一个页面，不需要持久实体时 entities 可为空。不要输出源码。严格 JSON Schema：{schema}\n需求：{request_text}'
+        prompt += '\n蓝图保持精炼：总输出控制在1200汉字以内，features 3至6条，每条description一句话；单页应用只列一个页面；验收3至5条，不增加用户没要求的功能。'
         model, validate, tokens = 'gpt-6-astra', contract.plan, 4096
     elif stage == 'spec':
         schemas = json.dumps([contract.Spec.model_json_schema(), contract.HtmlSpec.model_json_schema()], ensure_ascii=False)
@@ -257,6 +258,7 @@ async def generate_stage(stage, request_text, product_spec, payload):
         model, validate, tokens = 'deepseek-v4-pro', contract.app_spec, 8192
     elif stage == 'source':
         prompt = f"""实现完整可运行的单文件 HTML 应用，直接输出 <!doctype html> 到 </html>，不要 Markdown 或 JSON。
+代码保持紧凑，复用逻辑与样式，避免长注释、大段装饰 SVG 和重复标记，完整实现所有要求的功能。
 全部 CSS 和经典 JavaScript 内联，无 import、外部脚本、网络、iframe、表单外部提交、弹窗或页面跳转。不要占位逻辑。语义 HTML、键盘操作、手机触屏、响应式布局、错误与空状态都要实现。
 运行在不含 allow-same-origin 的沙箱中；不要使用 localStorage/sessionStorage/indexedDB。持久状态唯一 API 是 await window.sparkforge.loadState() 和 await window.sparkforge.saveState(JSON可序列化对象)，最多100KB；读取返回对象或 null，状态按版本保存到云端，保存失败会 reject，应显示错误。分享页可以交互，但保存仅在本次会话有效。
 逐项实现验收条件。2048 必须有真实4x4棋盘、每次移动仅合并一次、有效移动后随机生成2或4、计分、胜负判断、重新开始及键盘与触屏方向操作。

@@ -35,7 +35,7 @@ async def verify(version_id: int, body: Acceptance, db=Depends(get_db), user=Dep
     version = await owned(db, version_id, user.id)
     project = await Jobs(db, user.id).lock_project(version.project_id)
     if project.status not in ('awaiting_verification', 'ready'):
-        raise HTTPException(409, '项目正在处理其他任务，请完成或停止后再验收。')
+        raise HTTPException(409, '项目正在处理其他任务，请完成当前任务后再验收。')
     if project.active_version_id != version_id:
         raise HTTPException(409, '只能确认当前活动版本。')
     if len(body.checks) != len(version.product_spec.get('acceptance', [])) or not all(body.checks):
