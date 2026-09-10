@@ -57,6 +57,8 @@ export default function HtmlPreview({ html, title, versionId, readOnly = false }
           if (active) {
             const message = getErrorMessage(cause);
             setError(message);
+            // Never let generated error handlers replace an unread cloud state.
+            if (type === 'load') {setRunning(false); return;}
             target.postMessage({channel, type: 'response', id, error: message}, '*');
           }
         }

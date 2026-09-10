@@ -9,9 +9,13 @@ let state = {board:[2,2,2,2,...Array(12).fill(0)],score:0};
 let revision = 1;
 let saves = 0;
 let sdkMessages = 0;
+let failLoad = params.has('load-failure');
 window.addEventListener('message', event => {if (event.data?.type === 'mgx-token-saved') sdkMessages++;});
 client.apiCall.invoke = async (request: any) => {
-  if (request.method === 'GET') return {data:{state:structuredClone(state),revision}} as any;
+  if (request.method === 'GET') {
+    if (failLoad) {failLoad=false; throw new Error('读取存档失败');}
+    return {data:{state:structuredClone(state),revision}} as any;
+  }
   if (request.data.revision !== revision) throw new Error('修订冲突');
   state=structuredClone(request.data.state); revision++; saves++;
   return {data:{revision}} as any;

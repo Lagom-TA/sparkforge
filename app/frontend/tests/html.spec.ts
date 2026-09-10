@@ -65,3 +65,16 @@ test('new active version keeps a working runtime after read-only status changes'
   await expect.poll(()=>page.evaluate(()=>(window as any).fixture.saves())).toBe(1);
   await expect(page.getByRole('alert')).toHaveCount(0);
 });
+
+
+test('failed cloud load stops untrusted code and restart restores existing state',async({page})=>{
+  await page.goto('http://127.0.0.1:4317/tests/html.html?load-failure');
+  await expect(page.getByRole('alert')).toContainText('读取存档失败');
+  await expect(page.locator('iframe')).toHaveCount(0);
+  expect(await page.evaluate(()=>(window as any).fixture.saves())).toBe(0);
+  await page.getByRole('button',{name:'重新启动',exact:true}).click();
+  await expect(page.frameLocator('iframe').getByRole('gridcell')).toHaveCount(16);
+  await expect(page.getByRole('status')).toContainText('应用已启动');
+  expect(await page.evaluate(()=>(window as any).fixture.state().board.slice(0,4))).toEqual([2,2,2,2]);
+  await expect(page.getByRole('alert')).toHaveCount(0);
+});
