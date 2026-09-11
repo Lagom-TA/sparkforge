@@ -5,7 +5,7 @@ from typing import List, Optional
 from datetime import datetime, date
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
@@ -86,6 +86,24 @@ class VersionsBatchDeleteRequest(BaseModel):
 
 
 # ---------- Routes ----------
+class RestoreVersionRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    project_id: int = Field(gt=0, strict=True)
+    expected_active_version_id: int | None = Field(..., gt=0, strict=True)
+
+
+@router.post('/{id}/restore')
+async def restore(id: int, body: RestoreVersionRequest,
+                  current_user: UserResponse = Depends(get_current_user),
+                  db: AsyncSession = Depends(get_db)):
+    from services.version_restore import restore_version
+    try:
+        return await restore_version(db, current_user.id, body.project_id, id, body.expected_active_version_id)
+    except Exception:
+        await db.rollback()
+        raise
+
+
 @router.get("", response_model=VersionsListResponse)
 async def query_versionss(
     query: str = Query(None, description='Query conditions as JSON, e.g. {"id":2} or {"id":{"$gte":2}}'),

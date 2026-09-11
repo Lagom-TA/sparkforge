@@ -24,7 +24,7 @@ import {
 import { toast } from 'sonner';
 import AppPreview from '@/components/AppPreview';
 import VersionAcceptance from '@/components/VersionAcceptance';
-import { downloadSource } from '@/lib/source-download';
+import SourceBrowser from '@/components/SourceBrowser';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -42,6 +42,7 @@ import {
   listShareLinks,
   listVersions,
   revokeShareLink,
+  client,
 } from '@/lib/sparkforge';
 import {
   buildProject,
@@ -49,7 +50,9 @@ import {
   markGenerationInterrupted,
   resumeGeneration,
   planProject,
-  saveEditedPlan,
+  savePlanDraft,
+  getGenerationJob,
+  continueGeneration,
   TaskControl,
   TaskEvent,
 } from '@/lib/generation';
@@ -63,7 +66,7 @@ const stages = [
   { key: 'understanding', label: '理解需求' },
   { key: 'planning', label: '制定规划' },
   { key: 'building', label: '生成源码' },
-  { key: 'validating', label: '结构校验' },
+  { key: 'validating', label: '检查生成结果' },
   { key: 'saving', label: '保存版本' },
 ];
 
@@ -77,6 +80,12 @@ const stageProgress: Record<string, number> = {
   validating: 76,
   saving: 92,
   completed: 100,
+};
+
+const projectStatus: Record<string, string> = {
+  intake: '等待开始', planning: '正在规划', awaiting_approval: '等待确认',
+  building: '正在构建', awaiting_verification: '待验收', ready: '已验收',
+  failed: '需要处理', paused: '已暂停', stopped: '已停止',
 };
 
 export default function Workspace() {
@@ -116,6 +125,11 @@ function WorkspaceSession() {
   const loadRef = useRef(0);
   const shareBusyRef = useRef(false);
   const [sharing, setSharing] = useState(false);
+  const [canRetry, setCanRetry] = useState(false);
+  const [diagnostic, setDiagnostic] = useState<{code: string; message: string}>();
+  const [reconnect, setReconnect] = useState(0);
+  const admissionRef = useRef<Promise<Generation>>();
+  const draftRequest = useRef<{fingerprint: string; key: string}>();
 
   useEffect(() => () => {
     controlRef.current = 'stopped';
@@ -125,6 +139,8 @@ function WorkspaceSession() {
 
   const applyTaskEvent = useCallback((event: TaskEvent) => {
     setActiveTask(event.generation);
+    setCanRetry(event.canRetry ?? false);
+    setDiagnostic(event.diagnostic);
     setTaskStage(event.stage);
     setTaskProgress(event.progress);
     setTaskMessage(event.message);
@@ -147,17 +163,21 @@ function WorkspaceSession() {
       setSelectedVersion((current) =>
         current ? nextVersions.find((item) => item.id === current.id) ?? nextVersions[0] : nextVersions.find((item) => item.id === nextProject.active_version_id) ?? nextVersions[0],
       );
-      const nextPlan =
-        generations.find((item) => item.status === 'awaiting_approval' && item.product_spec)?.product_spec ??
-        generations.find((item) => item.product_spec)?.product_spec ??
-        nextVersions.find((item) => item.id === nextProject.active_version_id)?.product_spec ??
-        nextVersions[0]?.product_spec;
+      const latestGeneration = generations[0];
+      const nextPlan = (latestGeneration && !['stopped', 'succeeded'].includes(latestGeneration.status) ? latestGeneration.product_spec : undefined) ??
+        nextVersions.find(item => item.id === nextProject.active_version_id)?.product_spec;
       setPlan(nextPlan);
       setPlanDraft(nextPlan);
       setShare(shares.find((item) => item.is_active));
 
       const latest = generations[0];
       setActiveTask(latest);
+      if (latest && ['failed', 'running', 'paused'].includes(latest.status)) {
+        const snapshot = await getGenerationJob(latest.id);
+        if (request !== loadRef.current) return undefined;
+        setCanRetry(snapshot.can_retry ?? false);
+        setDiagnostic(snapshot.diagnostic);
+      }
       if (latest && ['running', 'paused', 'stopped', 'failed'].includes(latest.status)) {
         setActiveTask(latest);
         setTaskStage(latest.current_stage);
@@ -165,7 +185,7 @@ function WorkspaceSession() {
         setTaskMessage(latest.public_log.at(-1)?.message ?? '');
         if (latest.status === 'running' && !runningRef.current) {
           setBusy('');
-          setTaskMessage('任务已保存。点击恢复可查询进度并继续未完成的步骤。');
+          setTaskMessage('正在查询已保存进度并自动续接；离开页面后，下次打开工作区会继续。');
         }
       }
       return { nextProject, nextVersions, generations };
@@ -194,6 +214,7 @@ function WorkspaceSession() {
   }, [busy, taskStartedAt]);
 
   const beginRun = (kind: 'planning' | 'building') => {
+    admissionRef.current = undefined;
     runningRef.current = true;
     controlRef.current = 'running';
     runTokenRef.current += 1;
@@ -210,6 +231,7 @@ function WorkspaceSession() {
       const token = beginRun('planning');
       try {
         const result = await planProject(id, request, {
+          onAdmission: pending => {admissionRef.current = pending; void pending.catch(() => {});},
           getControl: () => (token === runTokenRef.current ? controlRef.current : 'stopped'),
           isCurrent: () => token === runTokenRef.current,
           onEvent: (event) => { if (token === runTokenRef.current) applyTaskEvent(event); },
@@ -226,7 +248,7 @@ function WorkspaceSession() {
           await load();
         }
       } finally {
-        if (token === runTokenRef.current) { runningRef.current = false; setBusy(''); }
+        if (token === runTokenRef.current && controlRef.current === 'running') { runningRef.current = false; setBusy(''); }
       }
     },
     [applyTaskEvent, id, load],
@@ -255,6 +277,9 @@ function WorkspaceSession() {
         plan,
         versions.length ? '根据对话继续优化' : '初始版本',
         {
+          onAdmission: pending => {admissionRef.current = pending; void pending.catch(() => {});},
+          expectedGenerationId: activeTask?.id ?? null,
+          expectedActiveVersionId: project?.active_version_id ?? null,
           getControl: () => (token === runTokenRef.current ? controlRef.current : 'stopped'),
           isCurrent: () => token === runTokenRef.current,
           onEvent: (event) => { if (token === runTokenRef.current) applyTaskEvent(event); },
@@ -277,19 +302,19 @@ function WorkspaceSession() {
         await load();
       }
     } finally {
-      if (token === runTokenRef.current) { runningRef.current = false; setBusy(''); }
+      if (token === runTokenRef.current && controlRef.current === 'running') { runningRef.current = false; setBusy(''); }
     }
   };
 
   const interrupt = async (control: Exclude<TaskControl, 'running'>) => {
     if (taskStage === 'saving') return;
     controlRef.current = control;
-    runTokenRef.current += 1;
     runningRef.current = true;
     setBusy('interrupting');
     try {
-      if (activeTask) {
-        const result = await markGenerationInterrupted(activeTask, control);
+      const admitted = admissionRef.current ? await admissionRef.current : activeTask;
+      if (admitted) {
+        const result = await markGenerationInterrupted(admitted, control);
         setActiveTask(result);
         if (result.status !== control) {
           setTaskMessage('任务已完成，保留已保存的结果。');
@@ -308,9 +333,9 @@ function WorkspaceSession() {
     }
   };
 
-  const resumeTask = async () => {
+  const resumeTask = async (automatic = false) => {
     if (!activeTask || runningRef.current) return;
-    if (message.trim()) {
+    if (!automatic && message.trim()) {
       const extra = message.trim();
       setMessage('');
       await runPlan(`${project?.initial_prompt ?? ''}\n用户追加要求：${extra}`);
@@ -318,23 +343,55 @@ function WorkspaceSession() {
     }
     const token = beginRun(activeTask.product_spec ? 'building' : 'planning');
     try {
-      const result = await resumeGeneration(activeTask, {
+      const result = await (automatic ? continueGeneration(activeTask.id, {
+        getControl: () => controlRef.current, isCurrent: () => token === runTokenRef.current,
+        onEvent: (event) => { if (token === runTokenRef.current) applyTaskEvent(event); },
+      }) : resumeGeneration(activeTask, {
         getControl: () => controlRef.current,
         isCurrent: () => token === runTokenRef.current,
         onEvent: (event) => { if (token === runTokenRef.current) applyTaskEvent(event); },
-      });
+      }));
       if (token !== runTokenRef.current) return;
-      if (result.version) setSelectedVersion(result.version);
+      if (result.version) {setSelectedVersion(result.version); setArtifactOpen(preferences.autoOpenArtifact);}
       if (result.generation.product_spec) setPlan(result.generation.product_spec);
       await load();
     } catch (error) {
       if (token === runTokenRef.current && !(error instanceof GenerationInterruptedError)) setError(getErrorMessage(error));
     } finally {
-      if (token === runTokenRef.current) { runningRef.current = false; setBusy(''); }
+      if (token === runTokenRef.current && controlRef.current === 'running') { runningRef.current = false; setBusy(''); }
     }
   };
 
-  const retryTask = resumeTask;
+  useEffect(() => {
+    const online = () => {setError(''); setReconnect(value => value + 1);};
+    window.addEventListener('online', online);
+    return () => window.removeEventListener('online', online);
+  }, []);
+
+  useEffect(() => {
+    if (activeTask?.status === 'running' && !runningRef.current && !error) void resumeTask(true);
+    // Only persisted running work auto-resumes. Pauses and permanent errors require an explicit action.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTask?.id, activeTask?.status, reconnect]);
+
+  const restoreVersion = async () => {
+    if (!selectedVersion || !project || runningRef.current) return;
+    if (!window.confirm(`恢复 V${selectedVersion.version_number} 为活动版本？CRUD 记录保留，交互应用使用该版本原有存档；未完成的规划会停止。`)) return;
+    runningRef.current = true;
+    setBusy('restoring');
+    setError('');
+    try {
+      await client.apiCall.invoke({url: `/api/v1/entities/versions/${selectedVersion.id}/restore`, method: 'POST',
+        data: {project_id: id, expected_active_version_id: project.active_version_id ?? null}});
+      setPlan(selectedVersion.product_spec);
+      setPlanDraft(selectedVersion.product_spec);
+      setPreviewKey(value => value + 1);
+      await load();
+      toast.success(`已恢复 V${selectedVersion.version_number}。`);
+    } catch (restoreError) { setError(getErrorMessage(restoreError)); }
+    finally { runningRef.current = false; setBusy(''); }
+  };
+
 
   const sendMessage = async () => {
     const nextMessage = message.trim();
@@ -347,19 +404,21 @@ function WorkspaceSession() {
   };
 
   const approvePlan = async () => {
-    if (!planDraft) return;
+    if (!planDraft || !project || runningRef.current) return;
+    runningRef.current = true;
+    setBusy('saving-plan'); setError('');
+    const fingerprint = JSON.stringify([planDraft, activeTask?.id, project.active_version_id]);
+    if (draftRequest.current?.fingerprint !== fingerprint) draftRequest.current = {fingerprint, key: crypto.randomUUID()};
     try {
-      if (activeTask) await saveEditedPlan(activeTask.id, planDraft);
-      setPlan(planDraft);
+      const saved = await savePlanDraft(id, planDraft, activeTask?.id ?? null, project.active_version_id ?? null, draftRequest.current.key);
+      setActiveTask(saved.generation);
+      setPlan(saved.generation.product_spec);
       setEditingPlan(false);
-      if (preferences.completionNotifications) {
-        toast.success('蓝图修改已保存，可以开始构建。');
-      }
-    } catch (planError) {
-      const message = getErrorMessage(planError);
-      setError(message);
-      if (preferences.errorNotifications) toast.error(message);
-    }
+      draftRequest.current = undefined;
+      await load();
+      toast.success('蓝图已保存，请确认并开始构建。');
+    } catch (planError) {setError(getErrorMessage(planError));}
+    finally {runningRef.current = false; setBusy('');}
   };
 
   const toggleShare = async () => {
@@ -405,10 +464,11 @@ function WorkspaceSession() {
   }
 
   const taskStatus = activeTask?.status;
-  const canRecover = ['paused', 'stopped', 'failed', 'running'].includes(taskStatus ?? '');
+  const canRecover = ['paused', 'running'].includes(taskStatus ?? '') || (taskStatus === 'failed' && canRetry);
+  const showTask = ['paused', 'stopped', 'failed', 'running'].includes(taskStatus ?? '');
 
   return (
-    <main className="flex min-h-screen flex-col bg-background">
+    <main className="flex min-h-screen flex-col overflow-x-clip bg-background">
       <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center justify-between border-b border-border/70 bg-card/95 px-3 shadow-[0_1px_12px_rgba(28,25,23,0.025)] sm:px-4">
         <div className="flex min-w-0 items-center gap-2">
           <Button variant="ghost" size="icon" asChild>
@@ -451,7 +511,7 @@ function WorkspaceSession() {
                   className={`block rounded-lg px-3 py-2 text-sm transition-colors hover:bg-sidebar-accent ${item.id === id ? 'bg-sidebar-accent font-medium' : 'text-muted-foreground'}`}
                 >
                   <span className="block truncate">{item.name}</span>
-                  <span className="mt-0.5 block text-[11px] font-normal text-muted-foreground">{item.status === 'ready' ? '可继续' : item.status}</span>
+                  <span className="mt-0.5 block text-[11px] font-normal text-muted-foreground">{projectStatus[item.status] ?? '等待处理'}</span>
                 </Link>
               ))}
             </div>
@@ -494,13 +554,22 @@ function WorkspaceSession() {
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-medium">SparkForge</p>
 
-                  {(busy || canRecover) && activeTask && (
+                  {['planning', 'building', 'interrupting'].includes(busy) && !activeTask && (
+                    <div className="sf-panel mt-4 rounded-xl border bg-card p-4" role="status">
+                      <p>{busy === 'interrupting' ? '正在等待服务器确认任务状态…' : '正在创建任务…'}</p>
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        <Button size="sm" variant="outline" disabled={busy === 'interrupting'} onClick={() => void interrupt('paused')}>暂停并补充</Button>
+                        <Button size="sm" variant="destructive" disabled={busy === 'interrupting'} onClick={() => void interrupt('stopped')}>停止</Button>
+                      </div>
+                    </div>
+                  )}
+                  {(busy || showTask) && activeTask && (
                     <div className="sf-panel mt-4 animate-in rounded-xl border border-border/80 bg-card p-4 fade-in slide-in-from-bottom-2 duration-300">
                       <div className="flex items-center justify-between gap-3">
                         <div>
                           <div className="flex items-center gap-2 text-sm font-semibold">
                             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <TimerReset className="h-4 w-4" />}
-                            {busy ? taskMessage : taskStatus === 'failed' ? '任务执行失败' : '任务可以恢复'}
+                            {busy ? taskMessage : taskStatus === 'failed' ? '任务执行失败' : taskStatus === 'stopped' ? '任务已停止。' : taskStatus === 'paused' ? '已暂停，可补充要求后重新规划。' : '任务可以恢复'}
                           </div>
                           <p className="mt-1 text-xs text-muted-foreground">
                             任务 #{activeTask.id} · {busy ? `已用时 ${elapsedSeconds} 秒` : `停在 ${taskStage}`}
@@ -512,11 +581,12 @@ function WorkspaceSession() {
                         <div className={`h-full rounded-full bg-primary transition-[width] duration-500 ${busy ? 'sf-progress-active' : ''}`} style={{ width: `${taskProgress}%` }} />
                       </div>
                       <div className="mt-4 grid gap-2 sm:grid-cols-2">
-                        {stages.map((stage) => {
-                          const complete = taskProgress >= (stageProgress[stage.key] ?? 100);
+                        {stages.map((stage, index) => {
+                          const current = ({understanding: 0, planning: 1, building: 2, validating: 3, saving: 4, completed: 5} as Record<string, number>)[taskStage] ?? 0;
+                          const complete = index < current;
                           return (
                             <div key={stage.key} className={`flex items-center gap-2 text-xs ${complete ? 'text-foreground' : 'text-muted-foreground'}`}>
-                              <Check className="h-3.5 w-3.5" />{stage.label}
+                              {complete ? <Check className="h-3.5 w-3.5" /> : <span className="h-3.5 w-3.5 rounded-full border" />}{stage.label}
                             </div>
                           );
                         })}
@@ -535,21 +605,20 @@ function WorkspaceSession() {
                       <div className="mt-4 flex flex-wrap gap-2">
                         {busy ? (
                           <>
-                            <Button size="sm" variant="outline" disabled={taskStage === 'saving' || busy === 'interrupting'} onClick={() => void interrupt('paused')}>
+                            <Button size="sm" variant="outline" disabled={taskStage === 'saving' || ['interrupting', 'saving-plan', 'restoring'].includes(busy)} onClick={() => void interrupt('paused')}>
                               <Pause className="mr-2 h-4 w-4" />暂停并补充
                             </Button>
-                            <Button size="sm" variant="destructive" disabled={taskStage === 'saving' || busy === 'interrupting'} onClick={() => void interrupt('stopped')}>
+                            <Button size="sm" variant="destructive" disabled={taskStage === 'saving' || ['interrupting', 'saving-plan', 'restoring'].includes(busy)} onClick={() => void interrupt('stopped')}>
                               <Square className="mr-2 h-4 w-4" />停止
                             </Button>
                           </>
                         ) : (
                           <>
-                            <Button size="sm" onClick={() => void resumeTask()}>
-                              <Play className="mr-2 h-4 w-4" />恢复
-                            </Button>
-                            <Button size="sm" variant="outline" onClick={() => void retryTask()}>
-                              <RotateCcw className="mr-2 h-4 w-4" />重试
-                            </Button>
+                            {canRecover && <Button size="sm" onClick={() => void resumeTask()}>
+                              <Play className="mr-2 h-4 w-4" />{taskStatus === 'failed' ? '重试当前步骤' : '恢复任务'}
+                            </Button>}
+                            {taskStatus !== 'stopped' && <Button size="sm" variant="outline" onClick={() => void interrupt('stopped')}>停止任务</Button>}
+                            {!canRecover && <p className="text-sm text-muted-foreground">{diagnostic?.code === 'data_conflict' ? '请保留原集合与字段，或先处理已有记录，再修改蓝图。' : diagnostic?.code?.startsWith('provider_') ? '请检查模型服务配置或额度，解决后重新规划。' : '请修改蓝图后重新构建，或输入新要求重新规划。'}</p>}
                           </>
                         )}
                         {(activeTask.error_message || error) && (
@@ -625,7 +694,7 @@ function WorkspaceSession() {
                             暂不实现项（每行一项）
                             <textarea className="mt-1.5 w-full rounded-md border bg-background px-3 py-2 font-normal" rows={3} value={(planDraft.outOfScope ?? []).join('\n')} onChange={(event) => setPlanDraft({ ...planDraft, outOfScope: event.target.value.split('\n').filter(Boolean) })} />
                           </label>
-                          <Button onClick={() => void approvePlan()}>保存并批准蓝图</Button>
+                          <Button disabled={!!busy} onClick={() => void approvePlan()}>{busy === 'saving-plan' ? '正在保存…' : '保存蓝图'}</Button>
                         </div>
                       ) : (
                         <>
@@ -756,21 +825,15 @@ function WorkspaceSession() {
                   </div>
                 </TabsContent>
                 <TabsContent value="source" className="mt-3">
-                  <div className="overflow-hidden rounded-xl border bg-[#18181b] text-zinc-100">
-                    <div className="flex h-11 items-center justify-between border-b border-white/10 px-4">
-                      <span className="flex items-center gap-2 text-xs text-zinc-400"><FileCode2 className="h-4 w-4" />{selectedVersion.app_spec.runtime === 'html' ? 'index.html' : 'src/App.tsx'}</span>
-                      <Button variant="ghost" size="sm" className="text-zinc-300" onClick={() => downloadSource(selectedVersion)}>下载源码</Button>
-                      <Button variant="ghost" size="sm" className="text-zinc-300 hover:bg-white/10 hover:text-white" onClick={async () => {
-                        try { await navigator.clipboard.writeText(selectedVersion.source_bundle.files[selectedVersion.app_spec.runtime === 'html' ? 'index.html' : 'src/App.tsx'] || '');
-                        toast.success('源码已复制。'); } catch {toast.error('复制失败，请手动选择源码复制。');}
-                      }}><Copy className="mr-2 h-4 w-4" />复制</Button>
-                    </div>
-                    <pre className="max-h-[calc(100vh-9rem)] overflow-auto p-5 text-xs leading-6">
-                      <code>{selectedVersion.source_bundle.files[selectedVersion.app_spec.runtime === 'html' ? 'index.html' : 'src/App.tsx'] || JSON.stringify(selectedVersion.source_bundle.files, null, 2)}</code>
-                    </pre>
-                  </div>
+                  <SourceBrowser key={selectedVersion.id} version={selectedVersion} />
                 </TabsContent>
                 <TabsContent value="versions" className="mt-3 space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-3 py-2">
+                    <p className="text-sm text-muted-foreground">当前活动版本：V{versions.find(version => version.id === project.active_version_id)?.version_number ?? '—'}</p>
+                    {selectedVersion.id !== project.active_version_id && <Button size="sm" variant="outline" disabled={!!busy} onClick={() => void restoreVersion()}>
+                      <RotateCcw className="mr-2 h-4 w-4" />{busy === 'restoring' ? '正在恢复…' : `恢复 V${selectedVersion.version_number}`}
+                    </Button>}
+                  </div>
                   {versions.map((version) => (
                     <button
                       key={version.id}
@@ -792,9 +855,9 @@ function WorkspaceSession() {
               <div className="grid min-h-[calc(100vh-5.5rem)] place-items-center rounded-xl border border-dashed bg-card/60 p-8 text-center">
                 <div>
                   <FileCode2 className="mx-auto h-7 w-7 text-muted-foreground" />
-                  <h2 className="mt-4 text-sm font-semibold">产物将在这里出现</h2>
+                  <h2 className="mt-4 text-sm font-semibold">{busy ? '正在生成应用' : activeTask?.status === 'failed' ? '构建需要处理' : plan ? '蓝图已就绪，等待构建' : '从产品蓝图开始'}</h2>
                   <p className="mt-2 max-w-sm text-sm leading-6 text-muted-foreground">
-                    确认方案并开始构建后，可在此查看应用预览、源码和历史版本。
+                    {busy ? '完成后会自动打开可操作的预览。任务进度已保存，可在左侧暂停或停止。' : activeTask && ['running', 'paused', 'failed', 'stopped'].includes(activeTask.status) ? '请在左侧查看任务信息并恢复；已有进度会保留，无需重复创建项目。' : '在左侧确认蓝图并开始构建，即可查看应用预览、完整源码和历史版本。'}
                   </p>
                 </div>
               </div>

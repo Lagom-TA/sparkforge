@@ -146,20 +146,20 @@ export async function listGenerations(projectId: number) {
   return items<Generation>(
     await client.entities.generations.query({
       query: { project_id: projectId },
-      sort: '-created_at',
+      sort: '-id',
       limit: 20,
     }),
   );
 }
 
 export async function listVersions(projectId: number) {
-  return items<Version>(
-    await client.entities.versions.query({
-      query: { project_id: projectId },
-      sort: '-version_number',
-      limit: 50,
-    }),
-  );
+  const versions: Version[] = [];
+  for (let skip = 0; skip < 10000; skip += 200) {
+    const page = items<Version>(await client.entities.versions.query({query: {project_id: projectId}, sort: '-version_number', skip, limit: 200}));
+    versions.push(...page);
+    if (page.length < 200) return versions;
+  }
+  throw new Error('历史版本超过当前浏览容量，请联系维护者导出完整历史。');
 }
 
 export async function listAppRecords(projectId: number, collectionKey: string) {

@@ -64,13 +64,16 @@ class Jobs:
         version = await self.db.get(Versions, job.version_id) if job.version_id else None
         from routers.generations import GenerationsResponse
         from routers.versions import VersionsResponse
-        return {'generation': GenerationsResponse.model_validate(generation).model_dump(mode='json'), 'status': job.status, 'stage': job.stage, 'kind': job.kind, 'diagnostic': job.payload.get('diagnostic'), 'version': VersionsResponse.model_validate(version).model_dump(mode='json') if version else None}
+        diagnostic = job.payload.get('diagnostic')
+        can_retry = job.status == 'failed' and bool(diagnostic and diagnostic.get('retryable')) and job.payload.get('attempts', {}).get(job.stage, 0) < 3
+        candidate = {'token': job.payload['candidate_token'], 'html': job.payload['candidate_source']['files']['index.html']} if job.stage == 'validation' and job.status in ('pending', 'running', 'paused') else None
+        return {'can_retry': can_retry, 'candidate': candidate, 'generation': GenerationsResponse.model_validate(generation).model_dump(mode='json'), 'status': job.status, 'stage': job.stage, 'kind': job.kind, 'diagnostic': job.payload.get('diagnostic'), 'version': VersionsResponse.model_validate(version).model_dump(mode='json') if version else None}
 
-    async def start(self, project_id, kind, request_text, request_key, product_spec=None):
-        if kind == 'build':
+    async def start(self, project_id, kind, request_text, request_key, product_spec=None, draft=False, expected_generation_id=None, expected_active_version_id=None):
+        if kind == 'build' or draft:
             product_spec = contract.plan(product_spec)
         project = await self.lock_project(project_id)
-        fingerprint = hashlib.sha256(json.dumps([project_id, kind, request_text, product_spec], ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+        fingerprint = hashlib.sha256(json.dumps([project_id, kind, request_text, product_spec, draft, expected_generation_id, expected_active_version_id], ensure_ascii=False, sort_keys=True).encode()).hexdigest()
         existing = (await self.db.execute(select(GenerationJob).where(GenerationJob.user_id == self.user_id, GenerationJob.request_key == request_key))).scalar_one_or_none()
         if existing:
             if existing.payload.get('fingerprint') != fingerprint:
@@ -78,15 +81,26 @@ class Jobs:
             result = await self.snapshot(existing)
             await self.db.commit()
             return result
-        active = (await self.db.execute(select(GenerationJob).where(GenerationJob.project_id == project_id, GenerationJob.user_id == self.user_id, GenerationJob.status.in_(['pending', 'running', 'paused', 'failed'])).order_by(GenerationJob.id.desc()))).scalars().first()
-        if active and active.status in ('pending', 'running'):
-            raise HTTPException(409, '此项目已有任务，请恢复或停止现有任务。')
-        # An explicit new task supersedes paused/failed work permanently.
-        if active:
-            active.status, active.lease_token = 'stopped', None
+        if kind == 'build':
+            latest = await self.db.scalar(select(Generations).where(Generations.project_id == project_id).order_by(Generations.id.desc()).limit(1))
+            if (latest.id if latest else None) != expected_generation_id or project.active_version_id != expected_active_version_id:
+                raise HTTPException(409, '蓝图或活动版本已变化，请刷新后重新确认构建。')
+            approved = latest.product_spec if latest and latest.status not in ('stopped', 'succeeded') else None
+            if approved is None and project.active_version_id:
+                approved = (await self.db.get(Versions, project.active_version_id)).product_spec
+            if approved is not None and approved != product_spec:
+                raise HTTPException(409, '构建内容与已保存蓝图不一致，请先保存蓝图。')
+        active_jobs = (await self.db.scalars(select(GenerationJob).where(
+            GenerationJob.project_id == project_id, GenerationJob.user_id == self.user_id,
+            GenerationJob.status.in_(['pending', 'running', 'paused', 'failed', 'awaiting_approval']),
+        ))).all()
+        if any(job.status in ('pending', 'running') for job in active_jobs):
+            raise HTTPException(409, '此项目已有任务，请先暂停或停止现有任务。')
+        for active in active_jobs:
+            active.status, active.lease_token, active.lease_until = 'stopped', None, None
             old = await self.db.get(Generations, active.generation_id)
             old.status = 'stopped'
-            log(old, '已由新任务替代。', 'warning')
+            log(old, '已批准或由新规划替代。', 'info')
         generation = Generations(user_id=self.user_id, project_id=project_id, request_text=request_text, status='running', current_stage='planning' if kind == 'plan' else 'building', product_spec=product_spec, public_log=[])
         self.db.add(generation)
         await self.db.flush()
@@ -97,11 +111,24 @@ class Jobs:
                 job.payload = {**job.payload, 'base_app_spec': previous.app_spec, 'base_source': previous.source_bundle}
         self.db.add(job)
         project.status = 'planning' if kind == 'plan' else 'building'
+        if draft:
+            job.status = generation.status = project.status = 'awaiting_approval'
+            generation.current_stage = 'awaiting_approval'
         log(generation, '任务已保存，可在刷新后恢复。')
         await self.db.flush()
         result = await self.snapshot(job)
         await self.db.commit()
         return result
+
+    async def save_draft(self, project_id, value, request_key, expected_generation_id, expected_active_version_id):
+        value = contract.plan(value)
+        project = await self.lock_project(project_id)
+        existing = await self.db.scalar(select(GenerationJob).where(GenerationJob.user_id == self.user_id, GenerationJob.request_key == request_key))
+        if not existing:
+            latest = await self.db.scalar(select(func.max(Generations.id)).where(Generations.project_id == project_id))
+            if latest != expected_generation_id or project.active_version_id != expected_active_version_id:
+                raise HTTPException(409, '项目已变化，请刷新后重新编辑蓝图。')
+        return await self.start(project_id, 'plan', '手动编辑的产品蓝图', request_key, value, draft=True)
 
     async def control(self, generation_id, action):
         job = await self.find(generation_id)
@@ -131,24 +158,14 @@ class Jobs:
         await self.db.commit()
         return result
 
-    async def edit_plan(self, generation_id, value):
-        value = contract.plan(value)
-        generation = await self.db.get(Generations, generation_id)
-        if not generation or generation.user_id != self.user_id:
-            raise HTTPException(404, '蓝图不存在。')
-        await self.lock_project(generation.project_id)
-        await self.db.refresh(generation)
-        latest = await self.db.scalar(select(func.max(Generations.id)).where(Generations.project_id == generation.project_id))
-        if latest != generation.id or generation.status != 'awaiting_approval':
-            raise HTTPException(409, '只能编辑待审批蓝图。')
-        generation.product_spec = value
-        await self.db.commit()
-        return value
-
     async def step(self, generation_id):
         job = await self.find(generation_id)
         await self.lock_project(job.project_id)
         job = await self.find(generation_id)
+        if job.stage == 'validation':
+            result = await self.snapshot(job)
+            await self.db.commit()
+            return result
         if job.status != 'pending' and not (job.status == 'running' and (not job.lease_until or aware(job.lease_until) <= now())):
             result = await self.snapshot(job)
             await self.db.commit()
@@ -229,6 +246,11 @@ class Jobs:
             job.stage, job.status = 'source', 'pending'
             generation.current_stage = 'building'
             log(generation, '应用结构已校验并保存，正在准备源码。')
+        elif payload['app_spec']['runtime'] == 'html':
+            job.payload = {**payload, 'candidate_source': value, 'candidate_token': uuid4().hex}
+            job.stage, job.status = 'validation', 'pending'
+            generation.current_stage = 'validating'
+            log(generation, '候选源码已保存，等待浏览器启动检查；当前活动版本保持不变。')
         else:
             # Publication is one transaction, serialized by the project row lock.
             number = (await self.db.scalar(select(func.max(Versions.version_number)).where(Versions.project_id == project_id))) or 0
@@ -239,6 +261,53 @@ class Jobs:
             job.status = generation.status = 'succeeded'
             generation.current_stage, project.status = 'completed', 'awaiting_verification'
             log(generation, f'V{number + 1} 源码结构已校验并保存，请在预览中逐项验证功能。', 'success')
+        result = await self.snapshot(job)
+        await self.db.commit()
+        return result
+
+
+    async def validate_candidate(self, generation_id, token, passed, message):
+        job = await self.find(generation_id)
+        project = await self.lock_project(job.project_id)
+        job = await self.find(generation_id)
+        if token != job.payload.get('candidate_token'):
+            raise HTTPException(409, '候选源码已变化，请重新检查。')
+        if job.status == 'succeeded':
+            result = await self.snapshot(job)
+            await self.db.commit()
+            return result
+        if job.stage != 'validation' or job.status != 'pending':
+            raise HTTPException(409, '此候选任务已暂停、停止或失效。')
+        generation = await self.db.get(Generations, generation_id, populate_existing=True)
+        payload = dict(job.payload)
+        if passed:
+            try:
+                await validate_existing_records(self.db, job.project_id, self.user_id, payload['app_spec'])
+            except contract.ContractError as error:
+                passed, message = False, str(error)
+                payload['diagnostic'] = {'code': 'data_conflict', 'message': message, 'retryable': False}
+        if passed:
+            number = (await self.db.scalar(select(func.max(Versions.version_number)).where(Versions.project_id == job.project_id))) or 0
+            version = Versions(user_id=self.user_id, project_id=job.project_id, version_number=number + 1,
+                product_spec=generation.product_spec, app_spec=contract.app_spec(payload['app_spec']),
+                source_bundle=contract.source(payload['candidate_source']), change_summary=generation.request_text[:500])
+            self.db.add(version)
+            await self.db.flush()
+            job.version_id = project.active_version_id = version.id
+            job.status = generation.status = 'succeeded'
+            generation.current_stage, project.status = 'completed', 'awaiting_verification'
+            payload['startup_check'] = {'method': 'owner_browser', 'passed': True}
+            log(generation, f'V{number + 1} 已通过浏览器语法与启动检查，请实际操作并验收功能。', 'success')
+        else:
+            job.stage = 'source'
+            job.status = generation.status = project.status = 'failed'
+            generation.current_stage = 'validating'
+            if payload.get('diagnostic', {}).get('code') != 'data_conflict':
+                payload['diagnostic'] = {'code': 'runtime_error', 'message': message[:500] or '浏览器启动检查失败。', 'retryable': True, 'stage': 'source'}
+            generation.error_message = payload['diagnostic']['message']
+            log(generation, generation.error_message, 'error')
+        payload.pop('candidate_source', None)
+        job.payload = payload
         result = await self.snapshot(job)
         await self.db.commit()
         return result

@@ -1,59 +1,36 @@
-"""Deterministic standalone React export of a validated AppSpec."""
-import json
-import hashlib
-from services.generation_contracts import app_spec
-
-TEMPLATE = r'''import { useState } from 'react';
-import './index.css';
+import { useState } from 'react';
+import './audit-export.css';
 type Field = {key:string;label:string;type:string;required?:boolean;options?:string[]};
 type Row = {id:string;values:Record<string,string|number|boolean>};
 type Spec = {runtime:'crud';app:{name:string;description:string};collections:{key:string;label:string;fields:Field[]}[];views:{type:'table'|'cards';collection:string;title:string;columns?:string[]}[];navigation:string[];dashboard:{label:string;metric:'count'|'completed'|'pending'}[];primaryAction:string};
-const spec:Spec = __SPEC__;
-const storageKey = 'sparkforge-export:__KEY__';
-function readRecords():Record<string,Row[]> {
-  const raw = localStorage.getItem(storageKey);
-  if (raw === null) return {};
-  const data = JSON.parse(raw);
-  if (!data || typeof data !== 'object' || Array.isArray(data)) throw Error('存档格式不正确');
-  for (const c of spec.collections) {
-    if (data[c.key] !== undefined && (!Array.isArray(data[c.key]) || data[c.key].some((r:Row) => !r || typeof r.id !== 'string' || !r.values || typeof r.values !== 'object' || Array.isArray(r.values)))) throw Error('记录格式不正确');
-  }
-  return data;
-}
+const spec:Spec = {"runtime": "crud", "app": {"name": "\u4efb\u52a1", "description": "\u4efb\u52a1\u7ba1\u7406"}, "navigation": ["\u8bb0\u5f55"], "dashboard": [{"label": "\u8bb0\u5f55", "metric": "count"}], "collections": [{"key": "tasks", "label": "\u4efb\u52a1", "fields": [{"key": "title", "label": "\u540d\u79f0", "type": "text"}, {"key": "done", "label": "\u5b8c\u6210", "type": "boolean"}]}], "views": [{"type": "table", "collection": "tasks", "title": "\u4efb\u52a1", "columns": ["title", "done"]}], "primaryAction": "\u65b0\u589e"};
+const storageKey = 'sparkforge-export:b559dd3dad8c513a38d0be51';
 export default function App() {
   const [viewIndex,setViewIndex] = useState(0);
   const view = spec.views[viewIndex];
   const collectionKey = view.collection;
-  const [initial] = useState(() => {
-    try { return {records:readRecords(),ready:true}; }
-    catch { return {records:{} as Record<string,Row[]>,ready:false}; }
+  const [records,setRecords] = useState<Record<string,Row[]>>(() => {
+    try { const data = JSON.parse(localStorage.getItem(storageKey) || '{}');
+      if (!data || typeof data !== 'object' || Array.isArray(data)) return {};
+      return Object.fromEntries(spec.collections.map(c => [c.key, Array.isArray(data[c.key]) ? data[c.key].filter((r:Row) => r && typeof r.id === 'string' && r.values && typeof r.values === 'object') : []]));
+    } catch { return {}; }
   });
-  const [records,setRecords] = useState<Record<string,Row[]>>(initial.records);
-  const [storageReady,setStorageReady] = useState(initial.ready);
   const [editing,setEditing] = useState<string|null>(null);
   const [values,setValues] = useState<Row['values']>({});
-  const [error,setError] = useState(initial.ready ? '' : '无法读取存档，已暂停修改，原始数据保持不变。请重新读取。');
+  const [error,setError] = useState('');
   const collection = spec.collections.find(c => c.key === collectionKey)!;
   const rows = records[collectionKey] || [];
   const fields:Field[] = collection.fields;
   const visibleFields = view.columns === undefined ? fields : view.columns.map(key => fields.find(field => field.key === key)!);
   const completed = rows.filter(row => fields.some(field => field.type === 'boolean' && row.values[field.key] === true)).length;
-  function reloadStorage() {
-    try {setRecords(readRecords());setStorageReady(true);setError('');}
-    catch {setStorageReady(false);setError('无法读取存档，已暂停修改，原始数据保持不变。请重新读取。');}
-  }
   function save(next:Record<string,Row[]>) {
-    if (!storageReady) return false;
     try { localStorage.setItem(storageKey,JSON.stringify(next));setRecords(next);setError('');return true; }
     catch { setError('浏览器存储不可用，记录尚未保存。');return false; }
   }
   return <main><h1>{spec.app.name}</h1><p>{spec.app.description}</p>
-    {error && <p role="alert">{error}</p>}
-    {!storageReady && <button onClick={reloadStorage}>重新读取存档</button>}
-    <fieldset disabled={!storageReady} style={{border:0,padding:0,margin:0,minWidth:0}}>
     <nav>{spec.views.map((v,index) => <button key={index} aria-current={index === viewIndex ? 'page' : undefined} onClick={() => {setViewIndex(index);setEditing(null);setValues({});}}>{spec.navigation[index]}</button>)}</nav>
     <div>{spec.dashboard.map((metric,index) => <p key={index}>{metric.label}：{metric.metric === 'count' ? rows.length : metric.metric === 'completed' ? completed : rows.length - completed}</p>)}</div>
-    <h2>{view.title}</h2>
+    <h2>{view.title}</h2>{error && <p role="alert">{error}</p>}
     <form onSubmit={e => { e.preventDefault();
       const normalized:Row['values'] = {};
       for (const f of fields) {
@@ -72,14 +49,5 @@ export default function App() {
     </form>
     {view.type === 'table' ? <table><thead><tr>{visibleFields.map(f => <th key={f.key}>{f.label}</th>)}<th>操作</th></tr></thead><tbody>{rows.map(r => <tr key={r.id}>{visibleFields.map(f => <td key={f.key}>{f.type === 'boolean' ? (r.values[f.key] ? '是' : '否') : String(r.values[f.key] ?? '')}</td>)}<td><button onClick={() => {setEditing(r.id);setValues({...r.values});}}>编辑</button><button onClick={() => {if(save({...records,[collectionKey]:rows.filter(v => v.id !== r.id)}) && editing === r.id){setEditing(null);setValues({});}}}>删除</button></td></tr>)}</tbody></table> : <section>{rows.map(r => <article key={r.id}>{visibleFields.map(f => <p key={f.key}>{f.label}：{f.type === 'boolean' ? (r.values[f.key] ? '是' : '否') : String(r.values[f.key] ?? '')}</p>)}<button onClick={() => {setEditing(r.id);setValues({...r.values});}}>编辑</button><button onClick={() => {if(save({...records,[collectionKey]:rows.filter(v => v.id !== r.id)}) && editing === r.id){setEditing(null);setValues({});}}}>删除</button></article>)}</section>}
 
-  </fieldset></main>;
+  </main>;
 }
-'''
-CSS = 'body{font-family:system-ui,sans-serif;margin:0;color:#18212f;background:#f7f8fa}main{max-width:960px;margin:auto;padding:24px}nav,form{display:flex;gap:12px;flex-wrap:wrap}label{display:grid;gap:6px}input,textarea,select,button{font:inherit;padding:8px}table{width:100%;margin-top:24px;border-collapse:collapse}th,td{text-align:left;padding:10px;border-bottom:1px solid #ddd}[role=alert]{color:#b42318}'
-
-
-def export_source(value):
-    spec = app_spec(value)
-    # Serialize as a JS object literal; no model text becomes executable syntax.
-    encoded = json.dumps(spec, ensure_ascii=True).replace('<', '\\u003c').replace('>', '\\u003e')
-    return {'files': {'src/App.tsx': TEMPLATE.replace('__SPEC__', encoded).replace('__KEY__', hashlib.sha256(encoded.encode()).hexdigest()[:24]), 'src/index.css': CSS}}

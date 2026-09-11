@@ -60,12 +60,19 @@ export default function Index() {
   const creatingRef = useRef(false);
   const [loggingOut, setLoggingOut] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [projectsError, setProjectsError] = useState('');
+
+  const loadProjects = async () => {
+    setProjectsError('');
+    try { setProjects(await listProjects()); }
+    catch (error) { setProjectsError(getErrorMessage(error)); }
+  };
 
   useEffect(() => {
     getCurrentUser()
-      .then(async () => {
+      .then(() => {
         setAuth('authenticated');
-        setProjects(await listProjects());
+        void loadProjects();
       })
       .catch(() => setAuth('anonymous'));
   }, []);
@@ -309,6 +316,11 @@ export default function Index() {
                   <Button className="mt-4 w-full" onClick={() => client.auth.toLogin()}>
                     登录 SparkForge
                   </Button>
+                </div>
+              ) : projectsError ? (
+                <div role="alert" className="rounded-lg border p-4">
+                  <p className="text-sm">项目列表加载失败：{projectsError}</p>
+                  <Button className="mt-3" variant="outline" onClick={() => void loadProjects()}>重新加载项目</Button>
                 </div>
               ) : projects.length === 0 ? (
                 <div className="rounded-lg border border-dashed border-border p-6 text-center">

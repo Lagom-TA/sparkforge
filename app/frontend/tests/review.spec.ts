@@ -77,7 +77,7 @@ for (const mode of ['success','lost','stopped','resume'] as const) {
       return harness.pipeline(mode);
     }, mode);
     expect(result.writes).toEqual([]);
-    expect(result.requests).toHaveLength(2);
+    expect(result.requests).toHaveLength(mode === 'lost' ? 7 : 2);
     expect(result.requests[1].url).toContain('/1/step');
     if (mode === 'resume') expect(result.requests[0].data.action).toBe('resume');
     else {
@@ -113,4 +113,20 @@ test('record loading includes later pages instead of silently truncating at 200'
   });
   expect(result.count).toBe(501);
   expect(result.calls[1]).toEqual({$lt:2});
+});
+
+test('candidate startup checks reject syntax and runtime errors without cloud writes',async({page})=>{
+ await page.goto('http://127.0.0.1:4317/tests/preview.html');
+ const result=await page.evaluate(async()=>{
+  const {checkStartup}=await import('/src/lib/startup-check.ts');
+  return Promise.all([
+   checkStartup('<html><head></head><body><script>const x = ;</script></body></html>'),
+   checkStartup('<html><head></head><body><script>throw Error("boot failed")</script></body></html>'),
+   checkStartup('<html><head></head><body><script>(async()=>{await sparkforge.loadState();await sparkforge.saveState({count:1});document.body.append("ready")})()</script></body></html>'),
+  ]);
+ });
+ expect(result[0].passed).toBe(false);expect(result[0].message).toContain('语法错误');
+ expect(result[1].passed).toBe(false);expect(result[1].message).toContain('boot failed');
+ expect(result[2].passed).toBe(true);
+ await expect(page.locator('iframe[title="候选应用启动检查"]')).toHaveCount(0);
 });

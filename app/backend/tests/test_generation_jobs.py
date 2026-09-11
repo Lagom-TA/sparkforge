@@ -43,7 +43,11 @@ async def sessions():
     await engine.dispose()
 
 async def start(sessions,kind='plan',key='request-000000001'):
-    async with sessions() as db: return await Jobs(db,'alice').start(1,kind,'synthetic',key,PLAN if kind=='build' else None)
+    async with sessions() as db:
+        latest=await db.scalar(select(func.max(Generations.id)).where(Generations.project_id==1))
+        project=await db.get(Projects,1)
+        return await Jobs(db,'alice').start(1,kind,'synthetic',key,PLAN if kind=='build' else None,
+            expected_generation_id=latest if kind=='build' else None, expected_active_version_id=project.active_version_id if kind=='build' else None)
 
 @pytest.mark.asyncio
 async def test_admission_idempotency_and_owner(sessions):
@@ -258,3 +262,192 @@ async def test_expired_lease_cannot_bypass_attempt_limit(sessions,monkeypatch):
         assert result['status']=='failed'
         assert result['diagnostic']['code']=='attempt_limit'
         module.generate_stage.assert_not_called()
+
+@pytest.mark.asyncio
+async def test_restore_preserves_data_and_fences_old_tasks(sessions):
+    from services.version_restore import restore_version
+    async with sessions() as db:
+        versions = [Versions(user_id='alice',project_id=1,version_number=i,product_spec=PLAN,app_spec=SPEC,source_bundle=SOURCE,change_summary='test') for i in (1,2)]
+        db.add_all(versions); await db.flush()
+        project = await db.get(Projects,1)
+        project.active_version_id=versions[1].id; project.status='awaiting_verification'
+        db.add(App_records(user_id='alice',project_id=1,collection_key='tasks',record_key='keep',data={'title':'saved'},is_deleted=False))
+        await db.commit()
+        old = await Jobs(db,'alice').start(1,'plan','test','restore-plan-00001')
+        await Jobs(db,'alice').control(old['generation']['id'],'paused')
+        result = await restore_version(db,'alice',1,versions[0].id,versions[1].id)
+        assert result['active_version_id']==versions[0].id
+        assert result['status']=='awaiting_verification'
+        assert (await Jobs(db,'alice').control(old['generation']['id'],'resume'))['status']=='stopped'
+        assert (await db.scalar(select(App_records))).data=={'title':'saved'}
+        assert await db.scalar(select(func.count()).select_from(Versions))==2
+    async with sessions() as db:
+        assert (await db.get(Projects,1)).active_version_id==versions[0].id
+
+@pytest.mark.asyncio
+async def test_restore_rejects_other_owner_stale_selection_and_running_job(sessions):
+    from services.version_restore import restore_version
+    async with sessions() as db:
+        version=Versions(user_id='alice',project_id=1,version_number=1,product_spec=PLAN,app_spec=SPEC,source_bundle=SOURCE,change_summary='test')
+        db.add(version);await db.commit(); ident=version.id
+    for user, expected, code in [('bob',None,404),('alice',999,409)]:
+        async with sessions() as db:
+            with pytest.raises(HTTPException) as error: await restore_version(db,user,1,ident,expected)
+            assert error.value.status_code==code
+    await start(sessions)
+    async with sessions() as db:
+        with pytest.raises(HTTPException) as error: await restore_version(db,'alice',1,ident,None)
+        assert error.value.status_code==409
+
+@pytest.mark.asyncio
+async def test_restore_rejects_incompatible_records_atomically(sessions):
+    from services.version_restore import restore_version
+    async with sessions() as db:
+        oldspec={**SPEC,'collections':[{**SPEC['collections'][0],'fields':[{'key':'other','label':'other','type':'text'}]}], 'views':[dict(type='table',collection='tasks',title='Tasks',columns=['other'])]}
+        old=Versions(user_id='alice',project_id=1,version_number=1,product_spec=PLAN,app_spec=oldspec,source_bundle=SOURCE,change_summary='old')
+        db.add(old);await db.flush()
+        db.add(App_records(user_id='alice',project_id=1,collection_key='tasks',record_key='keep',data={'title':'saved'},is_deleted=False))
+        await db.commit()
+        with pytest.raises(HTTPException) as error: await restore_version(db,'alice',1,old.id,None)
+        assert error.value.status_code==409
+        await db.rollback()
+        assert (await db.get(Projects,1)).active_version_id is None
+        assert (await db.scalar(select(App_records))).data=={'title':'saved'}
+
+@pytest.mark.asyncio
+async def test_restore_html_keeps_version_state_and_acceptance(sessions):
+    from services.version_restore import restore_version
+    async with sessions() as db:
+        spec={'runtime':'html','app':{'name':'Counter','description':'Counter'},'requirements':['count']}
+        source={'files':{'index.html':'<html><head></head><body>Counter</body></html>'}}
+        versions=[Versions(user_id='alice',project_id=1,version_number=i,product_spec=PLAN,app_spec=spec,source_bundle=source,change_summary='test') for i in (1,2)]
+        db.add_all(versions);await db.flush()
+        for v in versions: db.add(RuntimeState(version_id=v.id,user_id='alice',state={'count':v.version_number},revision=3))
+        db.add(VersionVerification(version_id=versions[0].id,user_id='alice'))
+        project=await db.get(Projects,1);project.active_version_id=versions[1].id
+        await db.commit()
+        result=await restore_version(db,'alice',1,versions[0].id,versions[1].id)
+        assert result['status']=='ready'
+        for v in versions:
+            state=await db.get(RuntimeState,v.id)
+            assert state.state=={'count':v.version_number} and state.revision==3
+
+@pytest.mark.asyncio
+async def test_restore_route_requires_auth():
+    from fastapi import FastAPI
+    from httpx import ASGITransport,AsyncClient
+    from routers.versions import router
+    from core.database import get_db
+    app=FastAPI();app.include_router(router)
+    async def db(): yield None
+    app.dependency_overrides[get_db]=db
+    async with AsyncClient(transport=ASGITransport(app=app),base_url='http://test') as client:
+        response=await client.post('/api/v1/entities/versions/1/restore',json={'project_id':1,'expected_active_version_id':2})
+        assert response.status_code==401
+
+@pytest.mark.asyncio
+async def test_new_draft_after_build_stops_old_approval_and_rejects_stale_editor(sessions,monkeypatch):
+    monkeypatch.setattr(module,'generate_stage',AsyncMock(side_effect=[PLAN,SPEC,SOURCE]))
+    async with sessions() as db:
+        jobs=Jobs(db,'alice')
+        first=await jobs.start(1,'plan','first','draft-first-000001');p=first['generation']['id']
+        await jobs.step(p)
+        build=await jobs.start(1,'build','build','draft-build-000001',PLAN,expected_generation_id=p);b=build['generation']['id']
+        assert (await db.get(Generations,p,populate_existing=True)).status=='stopped'
+        await jobs.step(b);done=await jobs.step(b)
+        changed={**PLAN,'title':'修改后的蓝图'}
+        saved=await jobs.save_draft(1,changed,'draft-edited-00001',b,done['version']['id'])
+        assert saved['status']=='awaiting_approval' and saved['generation']['product_spec']['title']=='修改后的蓝图'
+        assert saved['generation']['id']!=b
+        again=await jobs.save_draft(1,changed,'draft-edited-00001',b,done['version']['id'])
+        assert again['generation']['id']==saved['generation']['id']
+        with pytest.raises(HTTPException) as error: await jobs.save_draft(1,changed,'draft-stale-000001',b,done['version']['id'])
+        assert error.value.status_code==409
+
+@pytest.mark.asyncio
+async def test_html_candidate_cannot_activate_until_startup_passes(sessions,monkeypatch):
+    spec={'runtime':'html','app':{'name':'counter','description':'counter'},'requirements':['count']}
+    source={'files':{'index.html':'<html><head></head><body>counter</body></html>'}}
+    monkeypatch.setattr(module,'generate_stage',AsyncMock(side_effect=[spec,source,source]))
+    async with sessions() as db:
+        jobs=Jobs(db,'alice');start=await jobs.start(1,'build','build','html-build-000001',PLAN);ident=start['generation']['id']
+        await jobs.step(ident);candidate=await jobs.step(ident)
+        assert candidate['candidate']['html']==source['files']['index.html']
+        assert (await db.get(Projects,1,populate_existing=True)).active_version_id is None
+        assert await db.scalar(select(func.count()).select_from(Versions))==0
+        bad=await jobs.validate_candidate(ident,candidate['candidate']['token'],False,'SyntaxError')
+        assert bad['status']=='failed' and bad['can_retry']
+        await jobs.control(ident,'resume');candidate2=await jobs.step(ident)
+        with pytest.raises(HTTPException): await jobs.validate_candidate(ident,candidate['candidate']['token'],True,'')
+        done=await jobs.validate_candidate(ident,candidate2['candidate']['token'],True,'')
+        assert done['status']=='succeeded'
+        assert (await jobs.validate_candidate(ident,candidate2['candidate']['token'],True,''))['version']['id']==done['version']['id']
+        assert await db.scalar(select(func.count()).select_from(Versions))==1
+
+@pytest.mark.asyncio
+async def test_stop_fences_candidate_validation(sessions,monkeypatch):
+    spec={'runtime':'html','app':{'name':'test','description':'test'},'requirements':['test']}
+    source={'files':{'index.html':'<html><head></head><body>test</body></html>'}}
+    monkeypatch.setattr(module,'generate_stage',AsyncMock(side_effect=[spec,source]))
+    async with sessions() as db:
+        jobs=Jobs(db,'alice');start=await jobs.start(1,'build','build','html-stop-0000001',PLAN);ident=start['generation']['id']
+        await jobs.step(ident);candidate=await jobs.step(ident)
+        await jobs.control(ident,'stopped')
+        with pytest.raises(HTTPException) as error: await jobs.validate_candidate(ident,candidate['candidate']['token'],True,'')
+        assert error.value.status_code==409
+        assert (await db.get(Projects,1,populate_existing=True)).active_version_id is None
+
+@pytest.mark.asyncio
+async def test_stale_approval_preserves_new_draft_and_rejects_changed_content(sessions):
+    async with sessions() as db:
+        jobs=Jobs(db,'alice')
+        first=await jobs.save_draft(1,PLAN,'approval-first-001',None,None)
+        newer={**PLAN,'title':'新蓝图'}
+        second=await jobs.save_draft(1,newer,'approval-second-01',first['generation']['id'],None)
+        for expected,spec in [(first['generation']['id'],PLAN),(second['generation']['id'],PLAN)]:
+            with pytest.raises(HTTPException) as error:
+                await jobs.start(1,'build','build','approval-stale-001',spec,expected_generation_id=expected)
+            assert error.value.status_code==409
+        assert (await jobs.find(second['generation']['id'])).status=='awaiting_approval'
+        good=await jobs.start(1,'build','build','approval-good-0001',newer,expected_generation_id=second['generation']['id'])
+        duplicate=await jobs.start(1,'build','build','approval-good-0001',newer,expected_generation_id=second['generation']['id'])
+        assert good['generation']['id']==duplicate['generation']['id']
+
+
+def test_build_api_requires_explicit_approval_context():
+    from routers.generation_jobs import Start
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
+        Start(project_id=1,kind='build',request_text='build',request_key='request-build-0001',product_spec=PLAN)
+
+@pytest.mark.asyncio
+async def test_concurrent_approval_admits_only_one_build(sessions):
+    async with sessions() as db:
+        draft=await Jobs(db,'alice').save_draft(1,PLAN,'concurrent-draft-01',None,None)
+    async def approve(key):
+        async with sessions() as db:
+            return await Jobs(db,'alice').start(1,'build','build',key,PLAN,expected_generation_id=draft['generation']['id'])
+    results=await asyncio.gather(approve('concurrent-build-01'),approve('concurrent-build-02'),return_exceptions=True)
+    assert sum(isinstance(r,dict) for r in results)==1
+    assert sum(isinstance(r,HTTPException) and r.status_code==409 for r in results)==1
+
+@pytest.mark.asyncio
+async def test_approval_rejects_restored_version_and_accepts_paused_blueprint(sessions):
+    from services.version_restore import restore_version
+    async with sessions() as db:
+        jobs=Jobs(db,'alice')
+        versions=[Versions(user_id='alice',project_id=1,version_number=i,product_spec=PLAN,app_spec=SPEC,source_bundle=SOURCE,change_summary='test') for i in (1,2)]
+        db.add_all(versions);await db.flush()
+        project=await db.get(Projects,1);project.active_version_id=versions[1].id
+        await db.commit()
+        await restore_version(db,'alice',1,versions[0].id,versions[1].id)
+        with pytest.raises(HTTPException) as error:
+            await jobs.start(1,'build','build','restored-build-001',PLAN,expected_active_version_id=versions[1].id)
+        assert error.value.status_code==409
+        assert await db.scalar(select(func.count()).select_from(GenerationJob))==0
+        newer={**PLAN,'title':'新需求'}
+        draft=await jobs.save_draft(1,newer,'paused-draft-0001',None,versions[0].id)
+        build=await jobs.start(1,'build','build','paused-build-0001',newer,expected_generation_id=draft['generation']['id'],expected_active_version_id=versions[0].id)
+        await jobs.control(build['generation']['id'],'paused')
+        again=await jobs.start(1,'build','build','paused-build-0002',newer,expected_generation_id=build['generation']['id'],expected_active_version_id=versions[0].id)
+        assert again['generation']['product_spec']==newer
